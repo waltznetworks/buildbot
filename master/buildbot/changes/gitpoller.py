@@ -262,7 +262,8 @@ class GitPoller(base.PollingChangeSource, StateMixin):
         self.changeCount = len(revList)
         self.lastRev[branch] = newRev
 
-        log.msg('gitpoller: processing %d changes: %s from "%s"'
+        if self.changeCount != 0:
+            log.msg('gitpoller: processing %d changes: %s from "%s"'
                 % (self.changeCount, revList, self.repourl))
 
         for rev in revList:

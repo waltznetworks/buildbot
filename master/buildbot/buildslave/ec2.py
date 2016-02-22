@@ -54,6 +54,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                  valid_ami_owners=None, valid_ami_location_regex=None,
                  elastic_ip=None, identifier=None, secret_identifier=None,
                  aws_id_file_path=None, user_data=None, region=None,
+                 subnet_id=None, security_group_ids=None,
                  keypair_name='latent_buildbot_slave',
                  security_name='latent_buildbot_slave',
                  max_builds=None, notify_on_missing=[], missing_timeout=60 * 20,
@@ -93,6 +94,8 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         self.keypair_name = keypair_name
         self.security_name = security_name
         self.user_data = user_data
+        self.subnet_id = subnet_id
+        self.security_group_ids = security_group_ids
         self.spot_instance = spot_instance
         self.max_spot_price = max_spot_price
         self.volumes = volumes
@@ -267,9 +270,12 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
     def _start_instance(self):
         image = self.get_image()
         reservation = image.run(
-            key_name=self.keypair_name, security_groups=[self.security_name],
+            key_name=self.keypair_name,
             instance_type=self.instance_type, user_data=self.user_data,
-            placement=self.placement)
+            placement=self.placement,
+            subnet_id=self.subnet_id, 
+            security_group_ids=self.security_group_ids,
+            )
         self.instance = reservation.instances[0]
         instance_id, image_id, start_time = self._wait_for_instance(
             reservation)
