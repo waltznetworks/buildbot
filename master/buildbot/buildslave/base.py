@@ -907,12 +907,12 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
         return d
 
     def attached(self, bot):
-        if self.substantiation_deferred is None and self.build_wait_timeout >= 0:
-            msg = 'Slave %s received connection while not trying to ' \
-                'substantiate.  Disconnecting.' % (self.slavename,)
-            log.msg(msg)
-            self._disconnect(bot)
-            return defer.fail(RuntimeError(msg))
+        #if self.substantiation_deferred is None and self.build_wait_timeout >= 0:
+        #    msg = 'Slave %s received connection while not trying to ' \
+        #        'substantiate.  Disconnecting.' % (self.slavename,)
+        #    log.msg(msg)
+        #    self._disconnect(bot)
+        #    return defer.fail(RuntimeError(msg))
         return AbstractBuildSlave.attached(self, bot)
 
     def detached(self, mind):
