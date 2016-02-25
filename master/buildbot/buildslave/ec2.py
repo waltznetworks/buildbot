@@ -55,6 +55,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                  elastic_ip=None, identifier=None, secret_identifier=None,
                  aws_id_file_path=None, user_data=None, region=None,
                  subnet_id=None, security_group_ids=None,
+                 spot_instance_type='one-time',
                  keypair_name='latent_buildbot_slave',
                  security_name='latent_buildbot_slave',
                  max_builds=None, notify_on_missing=[], missing_timeout=60 * 20,
@@ -97,6 +98,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         self.subnet_id = subnet_id
         self.security_group_ids = security_group_ids
         self.spot_instance = spot_instance
+        self.spot_instance_type = spot_instance_type
         self.max_spot_price = max_spot_price
         self.volumes = volumes
         self.price_multiplier = price_multiplier
@@ -263,6 +265,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         if self.instance is not None:
             raise ValueError('instance active')
         if self.spot_instance:
+            log.msg('spot instance is true')
             return threads.deferToThread(self._request_spot_instance)
         else:
             return threads.deferToThread(self._start_instance)
@@ -363,13 +366,18 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         else:
             log.msg('%s %s requesting spot instance with price %0.2f.' %
                     (self.__class__.__name__, self.slavename, target_price))
+        log.msg('{} request spot instance with subnet {}'.format(self.slavename, self.subnet_id))
+        #print 'dd: userdata', self.user_data
         reservations = self.conn.request_spot_instances(
-            target_price, self.ami, key_name=self.keypair_name,
-            security_groups=[
-                self.security_name],
-            instance_type=self.instance_type,
-            user_data=self.user_data,
-            placement=self.placement)
+                target_price, self.ami,
+                key_name=self.keypair_name,
+                instance_type=self.instance_type,
+                type=self.spot_instance_type,
+                security_group_ids=self.security_group_ids,
+                subnet_id=self.subnet_id,
+                user_data=self.user_data,
+                placement=self.placement)
+
         request = self._wait_for_request(reservations[0])
         instance_id = request.instance_id
         reservations = self.conn.get_all_instances(instance_ids=[instance_id])
@@ -413,8 +421,11 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                 (self.__class__.__name__, self.slavename))
         duration = 0
         interval = self._poll_resolution
-        requests = self.conn.get_all_spot_instance_requests(
-            request_ids=[reservation.id])
+        try:
+            requests = self.conn.get_all_spot_instance_requests(
+                request_ids=[reservation.id])
+        except boto.exception.EC2ResponseError:
+            return requests[0], False
         request = requests[0]
         request_status = request.status.code
         while request_status in SPOT_REQUEST_PENDING_STATES:
@@ -447,3 +458,4 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                      request.id, request_status))
             raise interfaces.LatentBuildSlaveFailedToSubstantiate(
                 request.id, request.status)
+
