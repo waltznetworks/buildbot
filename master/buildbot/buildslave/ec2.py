@@ -360,6 +360,8 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
             instance_id, image_id, start_time = self._submit_request()
             if start_time == None:
                 raise LatentBuildSlaveFailedToSubstantiate()
+            if len(self.tags) > 0:
+                self.conn.create_tags(instance_id, self.tags)
         return instance_id, image_id, start_time
 
     def _submit_request(self):
