@@ -205,6 +205,11 @@ class BuildSlavesResource(HtmlResource):
                 info['last_heard_from_time'] = time.strftime("%Y-%b-%d %H:%M:%S",
                                                              time.localtime(last))
 
+            slave_conn_info = s.botmaster.slaves[name].slave.broker.transport.getPeer()
+            info['host'] = slave_conn_info.host
+            info['port'] = slave_conn_info.port
+            info['transport'] = slave_conn_info.transport
+
         template = request.site.buildbot_service.templates.get_template("buildslaves.html")
         data = template.render(**ctx)
         return data

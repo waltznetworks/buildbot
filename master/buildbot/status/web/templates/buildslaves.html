@@ -18,6 +18,7 @@
   <th>Last heard from</th>
   <th>Connects/Hour</th>
   <th>Status</th>
+  <th>IP Address:Port</th>
 </tr>
 
 {% for s in slaves %}
@@ -66,6 +67,10 @@
   {% else %}
     <td class="offline">Not connected</td>
   {% endif %}
+
+  <td>
+  {{ s.host }}:{{ s.port }}
+  </td>
   
   </tr>
 {% endfor %}
