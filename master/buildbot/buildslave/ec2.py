@@ -143,7 +143,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
 
             if region_found is not None:
                 self.conn = boto.ec2.connect_to_region(region,
-                                                       debug=2,
+                                                       #debug=2,
                                                        aws_access_key_id=identifier,
                                                        aws_secret_access_key=secret_identifier)
             else:
@@ -151,7 +151,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                     'The specified region does not exist: {0}'.format(region))
 
         else:
-            self.conn = boto.connect_ec2(identifier, secret_identifier, debug=2)
+            self.conn = boto.connect_ec2(identifier, secret_identifier)#, debug=2)
 
         # Make a keypair
         #
@@ -452,8 +452,9 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         try:
             requests = self.conn.get_all_spot_instance_requests(
                 request_ids=[reservation.id])
+            return requests[0], True
         except boto.exception.EC2ResponseError:
-            return requests[0], False
+            return None, False
         request = requests[0]
         request_status = request.status.code
         while request_status in SPOT_REQUEST_PENDING_STATES:
