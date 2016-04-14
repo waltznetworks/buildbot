@@ -68,9 +68,11 @@
     <td class="offline">Not connected</td>
   {% endif %}
 
-  <td>
-  {{ s.host }}:{{ s.port }}
-  </td>
+  {% if s.host and s.port %}
+    <td>{{ s.host }}:{{ s.port }}</td>
+  {% else %}
+    <td>Not available</td>
+  {% endif %}
   
   </tr>
 {% endfor %}
