@@ -453,7 +453,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
             requests = self.conn.get_all_spot_instance_requests(
                 request_ids=[reservation.id])
         except boto.exception.EC2ResponseError:
-            return requests[0], True
+            return requests[0], False
         request = requests[0]
         request_status = request.status.code
         while request_status in SPOT_REQUEST_PENDING_STATES:
