@@ -28,7 +28,6 @@ import time
 import boto
 import boto.ec2
 import boto.exception
-#boto.set_stream_logger("foo.log")
 
 from twisted.internet import defer
 from twisted.internet import threads
@@ -143,7 +142,6 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
 
             if region_found is not None:
                 self.conn = boto.ec2.connect_to_region(region,
-                                                       #debug=2,
                                                        aws_access_key_id=identifier,
                                                        aws_secret_access_key=secret_identifier)
             else:
@@ -151,7 +149,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                     'The specified region does not exist: {0}'.format(region))
 
         else:
-            self.conn = boto.connect_ec2(identifier, secret_identifier)#, debug=2)
+            self.conn = boto.connect_ec2(identifier, secret_identifier, debug=2)
 
         # Make a keypair
         #
