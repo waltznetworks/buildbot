@@ -18,6 +18,7 @@
   <th>Last heard from</th>
   <th>Connects/Hour</th>
   <th>Status</th>
+  <th>IP Address:Port</th>
 </tr>
 
 {% for s in slaves %}
@@ -65,6 +66,12 @@
         
   {% else %}
     <td class="offline">Not connected</td>
+  {% endif %}
+
+  {% if s.host and s.port %}
+    <td>{{ s.host }}:{{ s.port }}</td>
+  {% else %}
+    <td>Not available</td>
   {% endif %}
   
   </tr>
