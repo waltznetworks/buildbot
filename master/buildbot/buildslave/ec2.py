@@ -54,7 +54,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                  valid_ami_owners=None, valid_ami_location_regex=None,
                  elastic_ip=None, identifier=None, secret_identifier=None,
                  aws_id_file_path=None, user_data=None, region=None,
-                 subnet_id=None, security_group_ids=None,
+                 subnet_id=None, security_group_ids=None, instance_profile_name=None,
                  spot_instance_type='one-time',
                  keypair_name='latent_buildbot_slave',
                  security_name='latent_buildbot_slave',
@@ -98,6 +98,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
         self.user_data = user_data
         self.subnet_id = subnet_id
         self.security_group_ids = security_group_ids
+        self.instance_profile_name = instance_profile_name
         self.spot_instance = spot_instance
         self.spot_instance_type = spot_instance_type
         self.max_spot_price = max_spot_price
@@ -281,6 +282,7 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
             placement=self.placement,
             subnet_id=self.subnet_id, 
             security_group_ids=self.security_group_ids,
+            instance_profile_name=self.instance_profile_name
             )
         self.instance = reservation.instances[0]
         instance_id, image_id, start_time = self._wait_for_instance(
@@ -399,7 +401,8 @@ class EC2LatentBuildSlave(AbstractLatentBuildSlave):
                 security_group_ids=self.security_group_ids,
                 subnet_id=self.subnet_id,
                 user_data=self.user_data,
-                placement=self.placement)
+                placement=self.placement,
+                instance_profile_name=self.instance_profile_name)
 
         request, success = self._wait_for_request(reservations[0])
         if not success:
