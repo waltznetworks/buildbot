@@ -209,7 +209,7 @@ class BuildSlavesResource(HtmlResource):
                 peer_info = s.botmaster.slaves[name].slave.broker.transport.getPeer()
                 info['host'] = peer_info.host
                 info['port'] = peer_info.port
-                info['transport'] = peer_info.transport
+                # info['transport'] = peer_info.transport
 
         template = request.site.buildbot_service.templates.get_template("buildslaves.html")
         data = template.render(**ctx)
