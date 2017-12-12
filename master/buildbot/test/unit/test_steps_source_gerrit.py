@@ -13,13 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.status.results import SUCCESS
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.trial import unittest
+
+from buildbot.process.results import SUCCESS
 from buildbot.steps.source import gerrit
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import config
 from buildbot.test.util import sourcesteps
-from twisted.trial import unittest
 
 
 class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest.TestCase):
@@ -34,6 +38,8 @@ class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest
         self.setupStep(
             gerrit.Gerrit(repourl='http://github.com/buildbot/buildbot.git',
                           mode='full', method='clean'))
+        self.build.setProperty("event.change.project", "buildbot")
+        self.sourcestamp.project = 'buildbot'
         self.build.setProperty("event.patchSet.ref", "gerrit_branch")
 
         self.expectCommands(
@@ -61,7 +67,7 @@ class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest
                         command=['git', 'reset', '--hard', 'FETCH_HEAD', '--'])
             + 0,
             ExpectShell(workdir='wkdir',
-                        command=['git', 'branch', '-M', 'gerrit_branch'])
+                        command=['git', 'checkout', '-B', 'gerrit_branch'])
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['git', 'rev-parse', 'HEAD'])
@@ -69,14 +75,17 @@ class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest
                               stdout='f6ad368298bd941e934a41f3babc827b2aa95a1d')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
-        self.expectProperty('got_revision', 'f6ad368298bd941e934a41f3babc827b2aa95a1d', 'Gerrit')
+        self.expectOutcome(result=SUCCESS)
+        self.expectProperty(
+            'got_revision', 'f6ad368298bd941e934a41f3babc827b2aa95a1d', 'Gerrit')
         return self.runStep()
 
     def test_mode_full_clean_force_build(self):
         self.setupStep(
             gerrit.Gerrit(repourl='http://github.com/buildbot/buildbot.git',
                           mode='full', method='clean'))
+        self.build.setProperty("event.change.project", "buildbot")
+        self.sourcestamp.project = 'buildbot'
         self.build.setProperty("gerrit_change", "1234/567")
 
         self.expectCommands(
@@ -104,7 +113,7 @@ class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest
                         command=['git', 'reset', '--hard', 'FETCH_HEAD', '--'])
             + 0,
             ExpectShell(workdir='wkdir',
-                        command=['git', 'branch', '-M', 'refs/changes/34/1234/567'])
+                        command=['git', 'checkout', '-B', 'refs/changes/34/1234/567'])
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['git', 'rev-parse', 'HEAD'])
@@ -112,6 +121,94 @@ class TestGerrit(sourcesteps.SourceStepMixin, config.ConfigErrorsMixin, unittest
                               stdout='f6ad368298bd941e934a41f3babc827b2aa95a1d')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
-        self.expectProperty('got_revision', 'f6ad368298bd941e934a41f3babc827b2aa95a1d', 'Gerrit')
+        self.expectOutcome(result=SUCCESS)
+        self.expectProperty(
+            'got_revision', 'f6ad368298bd941e934a41f3babc827b2aa95a1d', 'Gerrit')
+        return self.runStep()
+
+    def test_mode_full_clean_force_same_project(self):
+        self.setupStep(
+            gerrit.Gerrit(repourl='http://github.com/buildbot/buildbot.git',
+                          mode='full', method='clean', codebase='buildbot'))
+        self.build.setProperty("event.change.project", "buildbot")
+        self.sourcestamp.project = 'buildbot'
+        self.build.setProperty("gerrit_change", "1234/567")
+
+        self.expectCommands(
+            ExpectShell(workdir='wkdir',
+                        command=['git', '--version'])
+            + ExpectShell.log('stdio',
+                              stdout='git version 1.7.5')
+            + 0,
+            Expect('stat', dict(file='wkdir/.buildbot-patched',
+                                logEnviron=True))
+            + 1,
+            Expect('listdir', {'dir': 'wkdir', 'logEnviron': True,
+                               'timeout': 1200})
+            + Expect.update('files', ['.git'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'clean', '-f', '-f', '-d'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'fetch', '-t',
+                                 'http://github.com/buildbot/buildbot.git',
+                                 'refs/changes/34/1234/567'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'reset', '--hard', 'FETCH_HEAD', '--'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'checkout', '-B', 'refs/changes/34/1234/567'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'rev-parse', 'HEAD'])
+            + ExpectShell.log('stdio',
+                              stdout='f6ad368298bd941e934a41f3babc827b2aa95a1d')
+            + 0,
+        )
+        self.expectOutcome(result=SUCCESS)
+        self.expectProperty(
+            'got_revision', {'buildbot': 'f6ad368298bd941e934a41f3babc827b2aa95a1d'}, 'Gerrit')
+        return self.runStep()
+
+    def test_mode_full_clean_different_project(self):
+        self.setupStep(
+            gerrit.Gerrit(repourl='http://github.com/buildbot/buildbot.git',
+                          mode='full', method='clean', codebase='buildbot'))
+        self.build.setProperty("event.change.project", "buildbot")
+        self.sourcestamp.project = 'not_buildbot'
+        self.build.setProperty("gerrit_change", "1234/567")
+
+        self.expectCommands(
+            ExpectShell(workdir='wkdir',
+                        command=['git', '--version'])
+            + ExpectShell.log('stdio',
+                              stdout='git version 1.7.5')
+            + 0,
+            Expect('stat', dict(file='wkdir/.buildbot-patched',
+                                logEnviron=True))
+            + 1,
+            Expect('listdir', {'dir': 'wkdir', 'logEnviron': True,
+                               'timeout': 1200})
+            + Expect.update('files', ['.git'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'clean', '-f', '-f', '-d'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'fetch', '-t',
+                                 'http://github.com/buildbot/buildbot.git',
+                                 'HEAD'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'reset', '--hard', 'FETCH_HEAD', '--'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['git', 'rev-parse', 'HEAD'])
+            + ExpectShell.log('stdio',
+                              stdout='f6ad368298bd941e934a41f3babc827b2aa95a1d')
+            + 0,
+        )
+        self.expectOutcome(result=SUCCESS)
         return self.runStep()

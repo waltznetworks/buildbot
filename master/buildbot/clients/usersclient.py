@@ -16,6 +16,9 @@
 # this class is known to contain cruft and will be looked at later, so
 # no current implementation utilizes it aside from scripts.runner.
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.cred import credentials
 from twisted.internet import reactor
 from twisted.spread import pb
@@ -40,14 +43,14 @@ class UsersClient(object):
         d = f.login(credentials.UsernamePassword(self.username, self.password))
         reactor.connectTCP(self.host, self.port, f)
 
+        @d.addCallback
         def call_commandline(remote):
             d = remote.callRemote("commandline", op, bb_username,
                                   bb_password, ids, info)
 
+            @d.addCallback
             def returnAndLose(res):
                 remote.broker.transport.loseConnection()
                 return res
-            d.addCallback(returnAndLose)
             return d
-        d.addCallback(call_commandline)
         return d

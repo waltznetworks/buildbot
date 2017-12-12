@@ -13,12 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.clients import usersclient
-from buildbot.process.users import users
-from buildbot.scripts import user
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.trial import unittest
+
+from buildbot.clients import usersclient
+from buildbot.process.users import users
+from buildbot.scripts import user
 
 
 class TestUsersClient(unittest.TestCase):

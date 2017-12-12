@@ -8,8 +8,8 @@ Properties
 Build properties are a generalized way to provide configuration information to build steps; see :ref:`Build-Properties` for the conceptual overview of properties.
 
 .. contents::
-   :depth: 1
-   :local:
+    :depth: 1
+    :local:
 
 Some build properties come from external sources and are set before the build begins; others are set during the build, and available for later steps.
 The sources for properties are:
@@ -21,10 +21,10 @@ The sources for properties are:
 :ref:`changes <Change-Sources>`
     A change can have properties attached to it, supplying extra information gathered by the change source.
     This is most commonly used with the :bb:cmdline:`sendchange` command.
-:bb:status:`forced builds <WebStatus>`
+forced builds
     The "Force Build" form allows users to specify properties
-:bb:cfg:`buildslaves <slaves>`
-    A buildslave can pass properties on to the builds it performs.
+:bb:cfg:`workers <workers>`
+    A worker can pass properties on to the builds it performs.
 :ref:`builds <Common-Build-Properties>`
     A build automatically sets a number of properties on itself.
 :bb:cfg:`builders <builders>`
@@ -72,20 +72,20 @@ The following build properties are set when the build is started, and are availa
     Each build gets a number, scoped to the :class:`Builder` (so the first build performed on any given :class:`Builder` will have a build number of 0).
     This integer property contains the build's number.
 
-.. index:: single: Properties; slavename
+.. index:: single: Properties; workername
 
-``slavename``
-    This is a string which identifies which buildslave the build is running on.
+``workername``
+    This is a string which identifies which worker the build is running on.
 
 .. index:: single: Properties; scheduler
 
 ``scheduler``
     If the build was started from a scheduler, then this property will contain the name of that scheduler.
 
-``workdir``
-    The absolute path of the base working directory on the slave, of the current builder.
+``builddir``
+    The absolute path of the base working directory on the worker, of the current builder.
 
-.. index:: single: Properties; workdir
+.. index:: single: Properties; builddir
 
 For single codebase builds, where the codebase is `''`, the following :ref:`Source-Stamp-Attributes` are also available as properties: ``branch``, ``revision``, ``repository``, and ``project`` .
 
@@ -106,14 +106,17 @@ Source Stamp Attributes
 
 ``changes``
 
-    This attribute is a list of dictionaries reperesnting the changes that make up this sourcestamp.
+    This attribute is a list of dictionaries representing the changes that make up this sourcestamp.
 
 Using Properties in Steps
 -------------------------
 
 For the most part, properties are used to alter the behavior of build steps during a build.
-This is done by annotating the step definition in ``master.cfg`` with placeholders.
-When the step is executed, these placeholders will be replaced using the current values of the build properties.
+This is done by using :index:`renderables <renderable>` (objects implementing the :class:`~buildbot.interfaces.IRenderable` interface) as step parameters.
+When the step is started, each such object is rendered using the current values of the build properties, and the resultant rendering is substituted as the actual value of the step parameter.
+
+Buildbot offers several renderable object types covering common cases.
+It's also possible to :ref:`create custom renderables <Custom-Renderables>`.
 
 .. note::
 
@@ -127,8 +130,8 @@ When the step is executed, these placeholders will be replaced using the current
     This does not work because the value of the property is not available when the ``if`` statement is executed.
     However, Python will not detect this as an error - you will just never see the step added to the factory.
 
-You can use build properties in most step parameters.
-Please file bugs for any parameters which do not accept properties.
+You can use renderables in most step parameters.
+Please file bugs for any parameters which do not accept renderables.
 
 .. index:: single: Properties; Property
 
@@ -137,23 +140,28 @@ Please file bugs for any parameters which do not accept properties.
 Property
 ++++++++
 
-The simplest form of annotation is to wrap the property name with :class:`Property`::
+The simplest renderable is :class:`Property`, which renders to the value of the property named by its argument::
 
-   from buildbot.plugins import steps, util
+    from buildbot.plugins import steps, util
 
-   f.addStep(steps.ShellCommand(command=['echo', 'buildername:', util.Property('buildername')]))
+    f.addStep(steps.ShellCommand(command=['echo', 'buildername:',
+                                 util.Property('buildername')]))
 
 You can specify a default value by passing a ``default`` keyword argument::
 
-   f.addStep(steps.ShellCommand(command=['echo', 'warnings:', util.Property('warnings', default='none')]))
+    f.addStep(steps.ShellCommand(command=['echo', 'warnings:',
+                                 util.Property('warnings', default='none')]))
 
 The default value is used when the property doesn't exist, or when the value is something Python regards as ``False``.
-The ``defaultWhenFalse`` argument can be set to ``False`` to force Buildbot to use the default argument only if the parameter is not set::
+The ``defaultWhenFalse`` argument can be set to ``False`` to force buildbot to use the default argument only if the parameter is not set::
 
-   f.addStep(steps.ShellCommand(command=['echo', 'warnings:',
-                    util.Property('warnings', default='none', defaultWhenFalse=False)]))
+    f.addStep(steps.ShellCommand(command=['echo', 'warnings:',
+                                 util.Property('warnings', default='none',
+                                               defaultWhenFalse=False)]))
 
-The default value can reference other properties, e.g.::
+The default value can be a renderable itself, e.g.,
+
+::
 
     command=util.Property('command', default=util.Property('default-command'))
 
@@ -175,10 +183,10 @@ A common mistake is to omit the trailing "s", leading to a rather obscure error 
 ::
 
     from buildbot.plugins import steps, util
-
-    f.addStep(steps.ShellCommand(command=['make',
-                                          util.Interpolate('REVISION=%(prop:got_revision)s'),
-                                          'dist']))
+    f.addStep(steps.ShellCommand(
+        command=['make',
+                util.Interpolate('REVISION=%(prop:got_revision)s'),
+                'dist']))
 
 This example will result in a ``make`` command with an argument like ``REVISION=12098``.
 
@@ -193,12 +201,14 @@ The following selectors are supported.
 
 ``src``
     The key is a codebase and source stamp attribute, separated by a colon.
+    Note, it is ``%(src:<codebase>:<ssattr>)s`` syntax, which differs from other selectors.
 
 ``kw``
     The key refers to a keyword argument passed to ``Interpolate``.
+    Those keyword arguments may be ordinary values or renderables.
 
-``slave``
-    The key to the per-buildslave "info" dictionary (e.g., the "Slave information" properties shown in the buildslave web page for each buildslave)
+``secrets``
+    The key refers to a secret provided by a provider declared in :bb:cfg:`secretsProviders` .
 
 The following ways of interpreting the value are available.
 
@@ -222,18 +232,41 @@ The following ways of interpreting the value are available.
     The character that follows the question mark is used as the delimiter between the two alternatives.
     In the above examples, it is a pipe, but any character other than ``(`` can be used.
 
-Although these are similar to shell substitutions, no other substitutions are currently supported.
+.. note::
 
-Example::
+   Although these are similar to shell substitutions, no other substitutions are currently supported.
+
+Example:
+
+.. code-block:: python
 
     from buildbot.plugins import steps, util
+    f.addStep(steps.ShellCommand(
+        command=[
+            'save-build-artifacts-script.sh',
+            util.Interpolate('-r %(prop:repository)s'),
+            util.Interpolate('-b %(src::branch)s'),
+            util.Interpolate('-d %(kw:data)s', data="some extra needed data")
+        ]))
 
-    f.addStep(steps.ShellCommand(command=['make',
-                                          util.Interpolate('REVISION=%(prop:got_revision:-%(src::revision:-unknown)s)s'),
-                                          'dist']))
+.. note::
+
+   We use ``%(src::branch)s`` in most of examples, because ``codebase`` is empty by default.
+
+Example:
+
+.. code-block:: python
+
+    from buildbot.plugins import steps, util
+    f.addStep(steps.ShellCommand(
+        command=[
+            'make',
+            util.Interpolate('REVISION=%(prop:got_revision:-%(src::revision:-unknown)s)s'),
+            'dist'
+        ]))
 
 In addition, ``Interpolate`` supports using positional string interpolation.
-Here, ``%s`` is used as a placeholder, and the substitutions (which may themselves be placeholders), are given as subsequent arguments::
+Here, ``%s`` is used as a placeholder, and the substitutions (which may be renderables), are given as subsequent arguments::
 
   TODO
 
@@ -250,7 +283,7 @@ Renderer
 ++++++++
 
 While Interpolate can handle many simple cases, and even some common conditionals, more complex cases are best handled with Python code.
-The ``renderer`` decorator creates a renderable object that will be replaced with the result of the function, called when the step it's passed to begins.
+The ``renderer`` decorator creates a renderable object whose rendering is obtained by calling the decorated function when the step it's passed to begins.
 The function receives an :class:`~buildbot.interfaces.IProperties` object, which it can use to examine the values of any and all properties.
 For example::
 
@@ -261,15 +294,48 @@ For example::
         command = ['make']
         cpus = props.getProperty('CPUs')
         if cpus:
-            command += ['-j', str(cpus + 1)]
+            command.extend(['-j', str(cpus+1)])
         else:
-            command += ['-j', '2']
-        command += ['all']
+            command.extend(['-j', '2'])
+        command.extend([util.Interpolate('%(prop:MAKETARGET)s')])
         return command
 
     f.addStep(steps.ShellCommand(command=makeCommand))
 
 You can think of ``renderer`` as saying "call this function when the step starts".
+
+.. note::
+
+    Since 0.9.3, renderer can itself return :class:`~buildbot.interfaces.IRenderable` objects or containers containing :class:`~buildbot.interfaces.IRenderable`.
+
+.. note::
+
+    Config errors with Renderables may not always be caught via checkconfig
+
+.. index:: single: Properties; Transform
+
+.. _Transform:
+
+Transform
++++++++++
+
+``Transform`` is an alternative to ``renderer``.
+While ``renderer`` is useful for creating new renderables, ``Transform`` is easier to use when you want to transform or combine the renderings of preexisting ones.
+
+``Transform`` takes a function and any number of positional and keyword arguments.
+The function must either be a callable object or a renderable producing one.
+When rendered, a ``Transform`` first replaces all of its arguments that are renderables with their renderings, then calls the function, passing it the positional and keyword arguments, and returns the result as its own rendering.
+
+For example, suppose ``my_path`` is a path on the worker, and you want to get it relative to the build directory.
+You can do it like this::
+
+    import os.path
+    from buildbot.plugins import util
+
+    my_path_rel = util.Transform(os.path.relpath, my_path, start=util.Property('builddir'))
+
+This works whether ``my_path`` is an ordinary string or a renderable.
+``my_path_rel`` will be a renderable in either case, however.
 
 .. index:: single: Properties; WithProperties
 
@@ -282,10 +348,12 @@ If nested list should be flatten for some renderables, FlattenList could be used
 For example::
 
     from buildbot.plugins import steps, util
+    f.addStep(steps.ShellCommand(
+        command=[ 'make' ],
+        descriptionDone=util.FlattenList([ 'make ', [ 'done' ]])
+    ))
 
-    f.addStep(steps.ShellCommand(command=['make'], descriptionDone=util.FlattenList(['make ', ['done']])))
-
-``descriptionDone`` would be set to ``['make', 'done']`` when the ``ShellCommand`` executes.
+``descriptionDone`` would be set to ``[ 'make', 'done' ]`` when the ``ShellCommand`` executes.
 This is useful when a list-returning property is used in renderables.
 
 .. note::
@@ -297,18 +365,18 @@ WithProperties
 
 .. warning::
 
-   This placeholder is deprecated. It is an older version of :ref:`Interpolate`.
-   It exists for compatibility with older configs.
+    This class is deprecated.
+    It is an older version of :ref:`Interpolate`.
+    It exists for compatibility with older configs.
 
 The simplest use of this class is with positional string interpolation.
 Here, ``%s`` is used as a placeholder, and property names are given as subsequent arguments::
 
     from buildbot.plugins import steps, util
-
     f.addStep(steps.ShellCommand(
-                command=["tar", "czf",
-                         util.WithProperties("build-%s-%s.tar.gz", "branch", "revision"),
-                         "source"]))
+        command=["tar", "czf",
+                util.WithProperties("build-%s-%s.tar.gz", "branch", "revision"),
+                "source"]))
 
 If this :class:`BuildStep` were used in a tree obtained from Git, it would create a tarball with a name like :file:`build-master-a7d3a333db708e786edb34b6af646edd8d4d3ad9.tar.gz`.
 
@@ -316,14 +384,15 @@ If this :class:`BuildStep` were used in a tree obtained from Git, it would creat
 
 The more common pattern is to use Python dictionary-style string interpolation by using the ``%(propname)s`` syntax.
 In this form, the property name goes in the parentheses, as above.
-A common mistake is to omit the trailing ``s``, leading to a rather obscure error from Python (``ValueError: unsupported format character``).
+A common mistake is to omit the trailing "s", leading to a rather obscure error from Python ("ValueError: unsupported format character").
 
 ::
 
     from buildbot.plugins import steps, util
-
-    f.addStep(steps.ShellCommand(command=['make', util.WithProperties('REVISION=%(got_revision)s'),
-                                          'dist']))
+    f.addStep(steps.ShellCommand(
+        command=['make',
+                util.WithProperties('REVISION=%(got_revision)s'),
+                'dist']))
 
 This example will result in a ``make`` command with an argument like ``REVISION=12098``.
 
@@ -347,44 +416,66 @@ Although these are similar to shell substitutions, no other substitutions are cu
 Note: like Python, you can use either positional interpolation *or* dictionary-style interpolation, not both.
 Thus you cannot use a string like ``WithProperties("foo-%(revision)s-%s", "branch")``.
 
+.. _Custom-Renderables:
+
 Custom Renderables
 ++++++++++++++++++
 
 If the options described above are not sufficient, more complex substitutions can be achieved by writing custom renderables.
 
-Renderables are objects providing the :class:`~buildbot.interfaces.IRenderable` interface.
-That interface is simple - objects must provide a `getRenderingFor` method.
-The method should take one argument - an :class:`~buildbot.interfaces.IProperties` provider - and should return a string or a deferred firing with a string.
+The :class:`~buildbot.interfaces.IRenderable` interface is simple - objects must provide a `getRenderingFor` method.
+The method should take one argument - an :class:`~buildbot.interfaces.IProperties` provider - and should return the rendered value or a deferred firing with one.
 Pass instances of the class anywhere other renderables are accepted.
 For example::
 
+    import time
     from buildbot.interfaces import IRenderable
-    from buildbot.plugins import steps
+    from zope.interface import implementer
 
+    @implementer(IRenderable)
     class DetermineFoo(object):
-        implements(IRenderable)
         def getRenderingFor(self, props):
             if props.hasProperty('bar'):
                 return props['bar']
             elif props.hasProperty('baz'):
                 return props['baz']
             return 'qux'
+    ShellCommand(command=['echo', DetermineFoo()])
 
-    steps.ShellCommand(command=['echo', DetermineFoo()])
+or, more practically,
 
-or, more practically,::
+::
 
+    from buildbot.interfaces import IRenderable
+    from zope.interface import implementer
+    from buildbot.plugins import util
+
+    @implementer(IRenderable)
     class Now(object):
-        implements(IRenderable)
         def getRenderingFor(self, props):
             return time.clock()
-    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)s', now=Now())])
+    ShellCommand(command=['make', util.Interpolate('TIME=%(kw:now)s', now=Now())])
 
 This is equivalent to::
+    
+    from buildbot.plugins import util
 
-    @renderer
+    @util.renderer
     def now(props):
         return time.clock()
-    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)s', now=now)])
+    ShellCommand(command=['make', util.Interpolate('TIME=%(kw:now)s', now=now)])
 
 Note that a custom renderable must be instantiated (and its constructor can take whatever arguments you'd like), whereas a function decorated with :func:`renderer` can be used directly.
+
+
+.. _URLForBuild:
+
+URL for build
++++++++++++++
+
+Its common to need to use the URL for the build in a step.
+For this you can use a special custom renderer as following::
+
+    from buildbot.plugins import *
+
+    ShellCommand(command=['make', util.Interpolate('BUILDURL=%(kw:url)s', url=util.URLForBuild)])

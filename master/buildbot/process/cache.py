@@ -13,12 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import config
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import iteritems
+
 from buildbot.util import lru
-from twisted.application import service
+from buildbot.util import service
 
 
-class CacheManager(config.ReconfigurableServiceMixin, service.Service):
+class CacheManager(service.ReconfigurableServiceMixin, service.AsyncService):
 
     """
     A manager for a collection of caches, each for different types of objects
@@ -59,17 +62,17 @@ class CacheManager(config.ReconfigurableServiceMixin, service.Service):
             c = self._caches[cache_name] = lru.AsyncLRUCache(miss_fn, max_size)
             return c
 
-    def reconfigService(self, new_config):
+    def reconfigServiceWithBuildbotConfig(self, new_config):
         self.config = new_config.caches
-        for name, cache in self._caches.iteritems():
+        for name, cache in iteritems(self._caches):
             cache.set_max_size(new_config.caches.get(name,
                                                      self.DEFAULT_CACHE_SIZE))
 
-        return config.ReconfigurableServiceMixin.reconfigService(self,
-                                                                 new_config)
+        return service.ReconfigurableServiceMixin.reconfigServiceWithBuildbotConfig(self,
+                                                                                    new_config)
 
     def get_metrics(self):
         return dict([
             (n, dict(hits=c.hits, refhits=c.refhits,
                      misses=c.misses, max_size=c.max_size))
-            for n, c in self._caches.iteritems()])
+            for n, c in iteritems(self._caches)])

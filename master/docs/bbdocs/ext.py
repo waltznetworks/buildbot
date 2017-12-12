@@ -13,14 +13,21 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import iteritems
+
 from docutils import nodes
+from docutils.parsers.rst import Directive
 from sphinx import addnodes
 from sphinx.domains import Domain
 from sphinx.domains import Index
 from sphinx.domains import ObjType
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
-from sphinx.util.compat import Directive
+from sphinx.util.docfields import DocFieldTransformer
+from sphinx.util.docfields import Field
+from sphinx.util.docfields import TypedField
 from sphinx.util.nodes import make_refnode
 
 
@@ -34,13 +41,15 @@ class BBRefTargetDirective(Directive):
     """
 
     has_content = False
+    name_annotation = None
     required_arguments = 1
     optional_arguments = 0
     final_argument_whitespace = True
     option_spec = {}
+    domain = 'bb'
 
     def run(self):
-        env = self.state.document.settings.env
+        self.env = env = self.state.document.settings.env
         # normalize whitespace in fullname like XRefRole does
         fullname = ws_re.sub(' ', self.arguments[0].strip())
         targetname = '%s-%s' % (self.ref_type, fullname)
@@ -66,11 +75,33 @@ class BBRefTargetDirective(Directive):
             else:
                 indextype = 'single'
                 indexentry = tpl % (fullname,)
-            entries.append((indextype, indexentry, targetname, targetname))
+            entries.append(
+                (indextype, indexentry, targetname, targetname, None))
 
         if entries:
             inode = addnodes.index(entries=entries)
             ret.insert(0, inode)
+
+        # if the node has content, set up a signature and parse the content
+        if self.has_content:
+            descnode = addnodes.desc()
+            descnode['domain'] = 'bb'
+            descnode['objtype'] = self.ref_type
+            descnode['noindex'] = True
+            signode = addnodes.desc_signature(fullname, '')
+
+            if self.name_annotation:
+                annotation = "%s " % self.name_annotation
+                signode += addnodes.desc_annotation(annotation, annotation)
+            signode += addnodes.desc_name(fullname, fullname)
+            descnode += signode
+
+            contentnode = addnodes.desc_content()
+            self.state.nested_parse(self.content, 0, contentnode)
+            DocFieldTransformer(self).transform_all(contentnode)
+            descnode += contentnode
+
+            ret.append(descnode)
 
         return ret
 
@@ -84,7 +115,8 @@ class BBRefTargetDirective(Directive):
         try:
             todocname, targetname = targets[target]
         except KeyError:
-            print "MISSING BB REFERENCE: bb:%s:%s" % (cls.ref_type, target)
+            env.warn(fromdocname, "Missing BB reference: bb:%s:%s" % (cls.ref_type, target),
+                     node.line)
             return None
 
         return make_refnode(builder, fromdocname,
@@ -92,13 +124,14 @@ class BBRefTargetDirective(Directive):
                             contnode, target)
 
 
-def make_ref_target_directive(ref_type, indextemplates=None):
+def make_ref_target_directive(ref_type, indextemplates=None, **kwargs):
     """
     Create and return a L{BBRefTargetDirective} subclass.
     """
+    class_vars = dict(ref_type=ref_type, indextemplates=indextemplates)
+    class_vars.update(kwargs)
     return type("BB%sRefTargetDirective" % (ref_type.capitalize(),),
-                (BBRefTargetDirective,),
-                dict(ref_type=ref_type, indextemplates=indextemplates))
+                (BBRefTargetDirective,), class_vars)
 
 
 class BBIndex(Index):
@@ -113,7 +146,7 @@ class BBIndex(Index):
     def generate(self, docnames=None):
         content = {}
         idx_targets = self.domain.data['targets'].get(self.name, {})
-        for name, (docname, targetname) in idx_targets.iteritems():
+        for name, (docname, targetname) in iteritems(idx_targets):
             letter = name[0].upper()
             content.setdefault(letter, []).append(
                 (name, 0, docname, targetname, '', '', ''))
@@ -147,53 +180,6 @@ def make_index(name, localname):
                 dict(name=name, localname=localname))
 
 
-class BugRole(object):
-
-    """
-    A role to create a link to a Trac bug, by number
-    """
-
-    def __call__(self, typ, rawtext, text, lineno, inliner,
-                 options={}, content=[]):
-        bugnum = text.lstrip('#')
-        node = nodes.reference('', '')
-        node['refuri'] = 'http://trac.buildbot.net/ticket/%s' % bugnum
-        node['reftitle'] = title = 'bug #%s' % bugnum
-        node.append(nodes.Text(title))
-        return [node], []
-
-
-class SrcRole(object):
-
-    """
-    A role to link to buildbot source on master
-    """
-
-    def __call__(self, typ, rawtext, text, lineno, inliner,
-                 options={}, content=[]):
-        node = nodes.reference('', '')
-        node['refuri'] = (
-            'https://github.com/buildbot/buildbot/blob/master/%s' % text)
-        node['reftitle'] = title = '%s' % text
-        node.append(nodes.literal(title, title))
-        return [node], []
-
-
-class PullRole(object):
-
-    """
-    A role to link to a buildbot pull request
-    """
-
-    def __call__(self, typ, rawtext, text, lineno, inliner,
-                 options={}, content=[]):
-        node = nodes.reference('', '')
-        node['refuri'] = ('https://github.com/buildbot/buildbot/pull/' + text)
-        node['reftitle'] = title = 'pull request %s' % text
-        node.append(nodes.Text(title, title))
-        return [node], []
-
-
 class BBDomain(Domain):
     name = 'bb'
     label = 'Buildbot'
@@ -203,8 +189,14 @@ class BBDomain(Domain):
         'sched': ObjType('sched', 'sched'),
         'chsrc': ObjType('chsrc', 'chsrc'),
         'step': ObjType('step', 'step'),
-        'status': ObjType('status', 'status'),
+        'reporter': ObjType('reporter', 'reporter'),
+        'configurator': ObjType('configurator', 'configurator'),
+        'worker': ObjType('worker', 'worker'),
         'cmdline': ObjType('cmdline', 'cmdline'),
+        'msg': ObjType('msg', 'msg'),
+        'event': ObjType('event', 'event'),
+        'rtype': ObjType('rtype', 'rtype'),
+        'rpath': ObjType('rpath', 'rpath'),
     }
 
     directives = {
@@ -228,15 +220,77 @@ class BBDomain(Domain):
                                               'single: Build Steps; %s',
                                               'single: %s Build Step',
                                           ]),
-        'status': make_ref_target_directive('status',
+        'reporter': make_ref_target_directive('reporter',
+                                              indextemplates=[
+                                                  'single: Reporter Targets; %s',
+                                                  'single: %s Reporter Target',
+                                              ]),
+        'configurator': make_ref_target_directive('configurator',
+                                              indextemplates=[
+                                                  'single: Configurators; %s',
+                                                  'single: %s Configurators',
+                                              ]),
+        'worker': make_ref_target_directive('worker',
                                             indextemplates=[
-                                                'single: Status Targets; %s',
-                                                'single: %s Status Target',
+                                                'single: Build Workers; %s',
+                                                'single: %s Build Worker',
                                             ]),
         'cmdline': make_ref_target_directive('cmdline',
                                              indextemplates=[
                                                  'single: Command Line Subcommands; %s',
                                                  'single: %s Command Line Subcommand',
+                                             ]),
+        'msg': make_ref_target_directive('msg',
+                                         indextemplates=[
+                                             'single: Message Schema; %s',
+                                         ],
+                                         has_content=True,
+                                         name_annotation='routing key:',
+                                         doc_field_types=[
+                                             TypedField('key', label='Keys', names=('key',),
+                                                        typenames=('type',), can_collapse=True),
+                                             Field('var', label='Variable',
+                                                   names=('var',)),
+                                         ]),
+        'event': make_ref_target_directive('event',
+                                           indextemplates=[
+                                               'single: event; %s',
+                                           ],
+                                           has_content=True,
+                                           name_annotation='event:',
+                                           doc_field_types=[
+                                           ]),
+        'rtype': make_ref_target_directive('rtype',
+                                           indextemplates=[
+                                               'single: Resource Type; %s',
+                                           ],
+                                           has_content=True,
+                                           name_annotation='resource type:',
+                                           doc_field_types=[
+                                               TypedField('attr', label='Attributes', names=('attr',),
+                                                          typenames=('type',), can_collapse=True),
+                                           ]),
+        'rpath': make_ref_target_directive('rpath',
+                                           indextemplates=[
+                                               'single: Resource Path; %s',
+                                           ],
+                                           name_annotation='path:',
+                                           has_content=True,
+                                           doc_field_types=[
+                                               TypedField('pathkey', label='Path Keys',
+                                                          names=('pathkey',), typenames=('type',),
+                                                          can_collapse=True),
+                                           ]),
+        'raction': make_ref_target_directive('raction',
+                                             indextemplates=[
+                                                 'single: Resource Action; %s',
+                                             ],
+                                             name_annotation='POST with method:',
+                                             has_content=True,
+                                             doc_field_types=[
+                                                 TypedField('body', label='Body keys',
+                                                            names=('body',), typenames=('type',),
+                                                            can_collapse=True),
                                              ]),
     }
 
@@ -245,14 +299,15 @@ class BBDomain(Domain):
         'sched': XRefRole(),
         'chsrc': XRefRole(),
         'step': XRefRole(),
-        'status': XRefRole(),
+        'reporter': XRefRole(),
+        'configurator': XRefRole(),
+        'worker': XRefRole(),
         'cmdline': XRefRole(),
-
-        'index': XRefRole(),
-
-        'bug': BugRole(),
-        'src': SrcRole(),
-        'pull': PullRole(),
+        'msg': XRefRole(),
+        'event': XRefRole(),
+        'rtype': XRefRole(),
+        'rpath': XRefRole(),
+        'index': XRefRole()
     }
 
     initial_data = {
@@ -264,8 +319,15 @@ class BBDomain(Domain):
         make_index("sched", "Scheduler Index"),
         make_index("chsrc", "Change Source Index"),
         make_index("step", "Build Step Index"),
-        make_index("status", "Status Target Index"),
+        make_index("reporter", "Reporter Target Index"),
+        make_index("configurator", "Configurator Target Index"),
+        make_index("worker", "Build Worker Index"),
         make_index("cmdline", "Command Line Index"),
+        make_index("msg", "MQ Routing Key Index"),
+        make_index("event", "Data API Event Index"),
+        make_index("rtype", "REST/Data API Resource Type Index"),
+        make_index("rpath", "REST/Data API Path Index"),
+        make_index("raction", "REST/Data API Actions Index"),
     ]
 
     def resolve_xref(self, env, fromdocname, builder, typ, target, node,

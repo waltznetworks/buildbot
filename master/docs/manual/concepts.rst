@@ -72,7 +72,7 @@ These parameters collectively specify a set of sources from which a build may be
 `Subversion <http://subversion.tigris.org>`_,  combines the repository, module, and branch into a single *Subversion URL* parameter.
 Within that scope, source checkouts can be specified by a numeric *revision number* (a repository-wide monotonically-increasing marker, such that each transaction that changes the repository is indexed by a different revision number), or a revision timestamp.
 When branches are used, the repository and module form a static ``baseURL``, while each build has a *revision number* and a *branch* (which defaults to a statically-specified ``defaultBranch``).
-The ``baseURL`` and ``branch`` are simply concatenated together to derive the ``svnurl`` to use for the checkout.
+The ``baseURL`` and ``branch`` are simply concatenated together to derive the ``repourl`` to use for the checkout.
 
 `Perforce <http://www.perforce.com/>`_ is similar.
 The server is specified through a ``P4PORT`` parameter.
@@ -83,7 +83,7 @@ When branches are used, the ``p4base`` and ``defaultBranch`` are concatenated to
 For the purposes of Buildbot (which never commits changes), the repository is specified with a URL and a revision number.
 
 The most common way to obtain read-only access to a bzr tree is via HTTP, simply by making the repository visible through a web server like Apache.
-Bzr can also use FTP and SFTP servers, if the buildslave process has sufficient privileges to access them.
+Bzr can also use FTP and SFTP servers, if the worker process has sufficient privileges to access them.
 Higher performance can be obtained by running a special Bazaar-specific server.
 None of these matter to the buildbot: the repository URL just has to match the kind of server being used.
 The ``repoURL`` argument provides the location of the repository.
@@ -94,7 +94,7 @@ Branches are expressed as subdirectories of the main central repository, which m
 Nor does it really have branches.
 In Darcs, each working directory is also a repository, and there are operations to push and pull patches from one of these ``repositories`` to another.
 For the Buildbot's purposes, all you need to do is specify the URL of a repository that you want to build from.
-The build slave will then pull the latest patches from that repository and build them.
+The worker will then pull the latest patches from that repository and build them.
 Multiple branches are implemented by using multiple repositories (possibly living on the same server).
 
 Builders which use Darcs therefore have a static ``repourl`` which specifies the location of the repository.
@@ -102,7 +102,7 @@ If branches are being used, the source Step is instead configured with a ``baseU
 Each build then has a specific branch which replaces ``defaultBranch``, or just uses the default one.
 Instead of a revision number, each build can have a ``context``, which is a string that records all the patches that are present in a given tree (this is the output of ``darcs changes --context``, and is considerably less concise than, e.g. Subversion's revision number, but the patch-reordering flexibility of Darcs makes it impossible to provide a shorter useful specification).
 
-`Mercurial <http://selenic.com/mercurial>`_ is like Darcs, in that each branch is stored in a separate repository.
+`Mercurial <https://www.mercurial-scm.org/>`_ is like Darcs, in that each branch is stored in a separate repository.
 The ``repourl``, ``baseURL``, and ``defaultBranch`` arguments are all handled the same way as with Darcs.
 The *revision*, however, is the hash identifier returned by ``hg identify``.
 
@@ -143,7 +143,7 @@ Files
 ~~~~~
 
 It also has a list of :attr:`files`, which are just the tree-relative filenames of any files that were added, deleted, or modified for this :class:`Change`.
-These filenames are used by the :func:`fileIsImportant` function (in the :class:`Scheduler`) to decide whether it is worth triggering a new build or not, e.g. the function could use the following function to only run a build if a C file were checked in::
+These filenames are used by the :func:`fileIsImportant` function (in the scheduler) to decide whether it is worth triggering a new build or not, e.g. the function could use the following function to only run a build if a C file were checked in::
 
     def has_C_files(change):
         for name in change.files:
@@ -176,7 +176,7 @@ Repository
 
 This attribute specifies the repository in which this change occurred.
 In the case of DVCS's, this information may be required to check out the committed source code.
-However, using the repository from a change has security risks: if Buildbot is configured to blindly trust this information, then it may easily be tricked into building arbitrary source code, potentially compromising the buildslaves and the integrity of subsequent builds.
+However, using the repository from a change has security risks: if Buildbot is configured to blindly trust this information, then it may easily be tricked into building arbitrary source code, potentially compromising the workers and the integrity of subsequent builds.
 
 .. _Attr-Codebase:
 
@@ -186,7 +186,7 @@ Codebase
 This attribute specifies the codebase to which this change was made.
 As described :ref:`above <Source-Stamps>`, multiple repositories may contain the same codebase.
 A change's codebase is usually determined by the :bb:cfg:`codebaseGenerator` configuration.
-By default the codebase is `''`; this value is used automatically for single-codebase configurations.
+By default the codebase is ''; this value is used automatically for single-codebase configurations.
 
 .. _Attr-Revision:
 
@@ -215,18 +215,18 @@ Revisions are always strings.
     :attr:`revision` is the transaction number
 
 `Git`
-    :attr:`revision` is a short string (a SHA1 hash), the output of e.g. :command:`git rev-parse`
+    :attr:`revision` is a short string (a SHA1 hash), the output of e.g.  :command:`git rev-parse`
 
 Branches
 ~~~~~~~~
 
 The Change might also have a :attr:`branch` attribute.
 This indicates that all of the Change's files are in the same named branch.
-The Schedulers get to decide whether the branch should be built or not.
+The schedulers get to decide whether the branch should be built or not.
 
 For VC systems like CVS,  Git and Monotone the :attr:`branch` name is unrelated to the filename.
 (That is, the branch name and the filename inhabit unrelated namespaces.)
-For SVN, branches are expressed as subdirectories of the repository, so the file's ``svnurl`` is a combination of some base URL, the branch name, and the filename within the branch.
+For SVN, branches are expressed as subdirectories of the repository, so the file's ``repourl`` is a combination of some base URL, the branch name, and the filename within the branch.
 (In a sense, the branch name and the filename inhabit the same namespace.)
 Darcs branches are subdirectories of a base URL just like SVN.
 Mercurial branches are the same as Darcs.
@@ -252,7 +252,7 @@ Mercurial branches are the same as Darcs.
 Change Properties
 ~~~~~~~~~~~~~~~~~
 
-A Change may have one or more properties attached to it, usually specified through the Force Build form or :bb:cmdline:`sendchange`.d
+A Change may have one or more properties attached to it, usually specified through the Force Build form or :bb:cmdline:`sendchange`.
 Properties are discussed in detail in the :ref:`Build-Properties` section.
 
 .. _Scheduling-Builds:
@@ -260,16 +260,16 @@ Properties are discussed in detail in the :ref:`Build-Properties` section.
 Scheduling Builds
 -----------------
 
-Each Buildmaster has a set of :class:`Scheduler` objects, each of which gets a copy of every incoming :class:`Change`.
+Each Buildmaster has a set of scheduler objects, each of which gets a copy of every incoming :class:`Change`.
 The Schedulers are responsible for deciding when :class:`Build`\s should be run.
-Some Buildbot installations might have a single :class:`Scheduler`, while others may have several, each for a different purpose.
+Some Buildbot installations might have a single scheduler, while others may have several, each for a different purpose.
 
 For example, a *quick* scheduler might exist to give immediate feedback to developers, hoping to catch obvious problems in the code that can be detected quickly.
 These typically do not run the full test suite, nor do they run on a wide variety of platforms.
 They also usually do a VC update rather than performing a brand-new checkout each time.
 
 A separate *full* scheduler might run more comprehensive tests, to catch more subtle problems.
-Configured to run after the quick scheduler, to give developers time to commit fixes to bugs caught by the quick scheduler before running the comprehensive tests.
+configured to run after the quick scheduler, to give developers time to commit fixes to bugs caught by the quick scheduler before running the comprehensive tests.
 This scheduler would also feed multiple :class:`Builder`\s.
 
 Many schedulers can be configured to wait a while after seeing a source-code change - this is the *tree stable timer*.
@@ -284,12 +284,12 @@ Schedulers can also filter on the branch to which a commit was made.
 There is some support for configuring dependencies between builds - for example, you may want to build packages only for revisions which pass all of the unit tests.
 This support is under active development in Buildbot, and is referred to as "build coordination".
 
-Periodic builds (those which are run every N seconds rather than after new Changes arrive) are triggered by a special :class:`Periodic` Scheduler subclass.
+Periodic builds (those which are run every N seconds rather than after new Changes arrive) are triggered by a special :bb:sched:`Periodic` scheduler.
 
-Each Scheduler creates and submits :class:`BuildSet` objects to the :class:`BuildMaster`, which is then responsible for making sure the individual :class:`BuildRequests` are delivered to the target :class:`Builder`\s.
+Each scheduler creates and submits :class:`BuildSet` objects to the :class:`BuildMaster`, which is then responsible for making sure the individual :class:`BuildRequests` are delivered to the target :class:`Builder`\s.
 
-:class:`Scheduler` instances are activated by placing them in the ``c['schedulers']`` list in the buildmaster config file.
-Each :class:`Scheduler` has a unique name.
+Scheduler instances are activated by placing them in the :bb:cfg:`schedulers` list in the buildmaster config file.
+Each scheduler must have a unique name.
 
 .. _BuildSet:
 
@@ -313,12 +313,12 @@ There are a couple of different likely values for the ``SourceStamp``:
 
 :samp:`(revision=None, changes=None, patch=None)`
     This builds the most recent code on the default branch.
-    This is the sort of :class:`SourceStamp` that would be used on a :class:`Build` that was triggered by a user request, or a :class:`Periodic` scheduler.
+    This is the sort of :class:`SourceStamp` that would be used on a :class:`Build` that was triggered by a user request, or a :bb:sched:`Periodic` scheduler.
     It is also possible to configure the VC Source Step to always check out the latest sources rather than paying attention to the :class:`Change`\s in the :class:`SourceStamp`, which will result in same behavior as this.
 
 :samp:`(branch={BRANCH}, revision=None, changes=None, patch=None)`
     This builds the most recent code on the given *BRANCH*.
-    Again, this is generally triggered by a user request or :class:`Periodic` build.
+    Again, this is generally triggered by a user request or a :bb:sched:`Periodic` scheduler.
 
 :samp:`(revision={REV}, changes=None, patch=({LEVEL}, {DIFF}, {SUBDIR_ROOT}))`
     This checks out the tree at the given revision *REV*, then applies a patch (using ``patch -pLEVEL <DIFF``) from inside the relative directory *SUBDIR_ROOT*.
@@ -334,8 +334,8 @@ BuildRequests
 -------------
 
 A :class:`BuildRequest` is a request to build a specific set of source code (specified by one ore more source stamps) on a single :class:`Builder`.
-Each :class:`Builder` runs the :class:`BuildRequest` as soon as it can (i.e. when an associated buildslave becomes free).
-:class:`BuildRequest`\s are prioritized from oldest to newest, so when a buildslave becomes free, the :class:`Builder` with the oldest :class:`BuildRequest` is run.
+Each :class:`Builder` runs the :class:`BuildRequest` as soon as it can (i.e. when an associated worker becomes free).
+:class:`BuildRequest`\s are prioritized from oldest to newest, so when a worker becomes free, the :class:`Builder` with the oldest :class:`BuildRequest` is run.
 
 The :class:`BuildRequest` contains one :class:`SourceStamp` specification per codebase.
 The actual process of running the build (the series of :class:`Step`\s that will be executed) is implemented by the :class:`Build` object.
@@ -351,16 +351,16 @@ A merge of buildrequests is performed per codebase, thus on changes having the s
 Builders
 --------
 
-The Buildmaster runs a collection of :class:`Builder`\s, each of which handles a single type of build (e.g. full versus quick), on one or more build slaves.
+The Buildmaster runs a collection of :class:`Builder`\s, each of which handles a single type of build (e.g. full versus quick), on one or more workers.
 :class:`Builder`\s serve as a kind of queue for a particular type of build.
 Each :class:`Builder` gets a separate column in the waterfall display.
 In general, each :class:`Builder` runs independently (although various kinds of interlocks can cause one :class:`Builder` to have an effect on another).
 
 Each builder is a long-lived object which controls a sequence of :class:`Build`\s.
 Each :class:`Builder` is created when the config file is first parsed, and lives forever (or rather until it is removed from the config file).
-It mediates the connections to the buildslaves that do all the work, and is responsible for creating the :class:`Build` objects - :ref:`Concepts-Build`.
+It mediates the connections to the workers that do all the work, and is responsible for creating the :class:`Build` objects - :ref:`Concepts-Build`.
 
-Each builder gets a unique name, and the path name of a directory where it gets to do all its work (there is a buildmaster-side directory for keeping status information, as well as a buildslave-side directory where the actual checkout/compile/test commands are executed).
+Each builder gets a unique name, and the path name of a directory where it gets to do all its work (there is a buildmaster-side directory for keeping status information, as well as a worker-side directory where the actual checkout/compile/test commands are executed).
 
 .. _Concepts-Build-Factories:
 
@@ -369,19 +369,19 @@ Build Factories
 
 A builder also has a :class:`BuildFactory`, which is responsible for creating new :class:`Build` instances: because the :class:`Build` instance is what actually performs each build, choosing the :class:`BuildFactory` is the way to specify what happens each time a build is done (:ref:`Concepts-Build`).
 
-.. _Concepts-Build-Slaves:
+.. _Concepts-Workers:
 
-Build Slaves
-------------
+Workers
+-------
 
-Each builder is associated with one of more :class:`BuildSlave`\s.
-A builder which is used to perform Mac OS X builds (as opposed to Linux or Solaris builds) should naturally be associated with a Mac buildslave.
+Each builder is associated with one of more :class:`Worker`\s.
+A builder which is used to perform Mac OS X builds (as opposed to Linux or Solaris builds) should naturally be associated with a Mac worker.
 
-If multiple buildslaves are available for any given builder, you will have some measure of redundancy: in case one slave goes offline, the others can still keep the :class:`Builder` working.
-In addition, multiple buildslaves will allow multiple simultaneous builds for the same :class:`Builder`, which might be useful if you have a lot of forced or ``try`` builds taking place.
+If multiple workers are available for any given builder, you will have some measure of redundancy: in case one worker goes offline, the others can still keep the :class:`Builder` working.
+In addition, multiple workers will allow multiple simultaneous builds for the same :class:`Builder`, which might be useful if you have a lot of forced or ``try`` builds taking place.
 
-If you use this feature, it is important to make sure that the buildslaves are all, in fact, capable of running the given build.
-The slave hosts should be configured similarly, otherwise you will spend a lot of time trying (unsuccessfully) to reproduce a failure that only occurs on some of the buildslaves and not the others.
+If you use this feature, it is important to make sure that the workers are all, in fact, capable of running the given build.
+The worker hosts should be configured similarly, otherwise you will spend a lot of time trying (unsuccessfully) to reproduce a failure that only occurs on some of the workers and not the others.
 Different platforms, operating systems, versions of major programs or libraries, all these things mean you should use separate Builders.
 
 .. _Concepts-Build:
@@ -405,7 +405,7 @@ Buildbot has a somewhat limited awareness of *users*.
 It assumes the world consists of a set of developers, each of whom can be described by a couple of simple attributes.
 These developers make changes to the source code, causing builds which may succeed or fail.
 
-Users also may have different levels of authorization when issuing Buildbot commands, such as forcing a build from the web interface or from an IRC channel (see :bb:status:`WebStatus` and :bb:status:`IRC`).
+Users also may have different levels of authorization when issuing Buildbot commands, such as forcing a build from the web interface or from an IRC channel.
 
 Each developer is primarily known through the source control system.
 Each :class:`Change` object that arrives is tagged with a :attr:`who` field that typically gives the account name (on the repository machine) of the user responsible for that change.
@@ -422,7 +422,7 @@ The ``who`` fields in ``git`` Changes are used to create :ref:`User-Objects`, wh
 User Objects
 ~~~~~~~~~~~~
 
-User Objects allow Buildbot to better manage users throughout its various interactions with users (see :ref:`Change-Sources` and :ref:`Status-Targets`).
+User Objects allow Buildbot to better manage users throughout its various interactions with users (see :ref:`Change-Sources` and :ref:`Reporters`).
 The User Objects are stored in the Buildbot database and correlate the various attributes that a user might have: irc, Git, etc.
 
 Changes
@@ -455,8 +455,6 @@ Tools
 
 For managing users manually, use the ``buildbot user`` command, which allows you to add, remove, update, and show various attributes of users in the Buildbot database (see :ref:`Command-line-Tool`).
 
-To show all of the users in the database in a more pretty manner, use the users page in the :bb:Status:`WebStatus`.
-
 Uses
 ++++
 
@@ -466,7 +464,7 @@ This provides a more complete view of users throughout Buildbot.
 One such use is being able to find email addresses based on a set of Builds to notify users through the ``MailNotifier``.
 This process is explained more clearly in :ref:`Email-Addresses`.
 
-Another way to utilize `User Objects` is through `UsersAuth` for web authentication (see :bb:status:`WebStatus`).
+Another way to utilize `User Objects` is through `UsersAuth` for web authentication.
 To use `UsersAuth`, you need to set a `bb_username` and `bb_password` via the ``buildbot user`` command line tool to check against.
 The password will be encrypted before storing in the database along with other user attributes.
 
@@ -490,7 +488,7 @@ If desired, the buildbot can notify the interested users until the problem is re
 Email Addresses
 ~~~~~~~~~~~~~~~
 
-The :bb:status:`MailNotifier` is a status target which can send email about the results of each build.
+The :bb:reporter:`MailNotifier` is a status target which can send email about the results of each build.
 It accepts a static list of email addresses to which each message should be delivered, but it can also be configured to send mail to the :class:`Build`\'s Interested Users.
 To do this, it needs a way to convert User names into email addresses.
 
@@ -530,13 +528,6 @@ It can report on the likelihood that the user saw the given message (based upon 
 
 These operations and authentication of commands issued by particular nicknames will be implemented in :ref:`User-Objects`.
 
-.. _Live-Status-Clients:
-
-Live Status Clients
-~~~~~~~~~~~~~~~~~~~
-
-The Buildbot also offers a desktop status client interface which can display real-time build status in a GUI panel on the developer's desktop.
-
 .. index:: Properties
 
 .. _Build-Properties:
@@ -565,7 +556,7 @@ Some projects want to perform nightly builds as well as building in response to 
 Such a project would run two schedulers, both pointing to the same set of builders, but could provide an ``is_nightly`` property so that steps can distinguish the nightly builds, perhaps to run more resource-intensive tests.
 
 Some projects have different build processes on different systems.
-Rather than create a build factory for each slave, the steps can use buildslave properties to identify the unique aspects of each slave and adapt the build process dynamically.
+Rather than create a build factory for each worker, the steps can use worker properties to identify the unique aspects of each worker and adapt the build process dynamically.
 
 .. _Multiple-Codebase-Builds:
 
@@ -614,3 +605,88 @@ multiple *source steps* - one for each codebase
 .. warning::
 
     Defining a :bb:cfg:`codebaseGenerator` that returns non-empty (not ``''``) codebases will change the behavior of all the schedulers.
+
+.. _Multimaster:
+
+Multimaster
+-----------
+
+.. Warning::
+
+    Buildbot Multimaster is considered experimental.
+    There are still some companies using it in production.
+    Don't hesitate to use the mailing lists to share your experience.
+
+.. blockdiag::
+
+    blockdiag multimaster {
+       Worker1 -> LoadBalancer -> Master1 -> database
+       Worker2 -> LoadBalancer
+       Worker2 [shape = "dots"];
+       WorkerN -> LoadBalancer -> Master2 -> database
+       User1 -> LoadBalancerUI -> MasterUI1 -> database
+       User2 -> LoadBalancerUI -> MasterUI2 -> database
+       Master1 -> crossbar.io
+       Master2 -> crossbar.io
+       MasterUI1 -> crossbar.io
+       MasterUI2 -> crossbar.io
+       database [shape = "flowchart.database", stacked];
+       LoadBalancerUI [shape = ellipse];
+       LoadBalancer [shape = ellipse];
+       crossbar.io [shape = mail];
+       User1 [shape = actor];
+       User2 [shape = actor];
+       default_shape = roundedbox;
+       default_node_color = "#33b5e5";
+       default_group_color = "#428bca";
+       default_linecolor = "#0099CC";
+       default_textcolor = "#e1f5fe";
+       group {
+          shape = line;
+          Worker1; Worker2; WorkerN
+       }
+       group {
+          shape = line;
+          Master1; Master2; MasterUI1; MasterUI2
+       }
+       group {
+          shape = line;
+          database; crossbar.io;
+       }
+       group {
+          shape = line;
+          User1; User2;
+       }
+    }
+
+Buildbot supports interconnection of several masters.
+This has to be done through a multi-master enabled message queue backend.
+As of now the only one supported is wamp and crossbar.io.
+see :ref:`wamp <MQ-Specification>`
+
+There are then several strategy for introducing multimaster in your buildbot infra.
+A simple way to say it is by adding the concept of symmetrics and asymmetrics multimaster (like there is SMP and AMP for multi core CPUs)
+
+Symmetric multimaster is when each master share the exact same configuration. They run the same builders, same schedulers, same everything, the only difference is that workers are connected evenly between the masters (by any means (e.g. DNS load balancing, etc)) Symmetric multimaster is good to use to scale buildbot horizontally.
+
+Asymmetric multimaster is when each master have different configuration. Each master may have a specific responsibility (e.g schedulers, set of builder, UI). This was more how you did in 0.8, also because of its own technical limitations. A nice feature of asymmetric multimaster is that you can have the UI only handled by some masters.
+
+Separating the UI from the controlling will greatly help in the performance of the UI, because badly written BuildSteps?? can stall the reactor for several seconds.
+
+The fanciest configuration would probably be a symmetric configuration for everything but the UI.
+You would scale the number of UI master according to your number of UI users, and scale the number of engine masters to the number of workers.
+
+Depending on your workload and size of master host, it is probably a good idea to start thinking of multimaster starting from a hundred workers connected.
+
+Multimaster can also be used for high availability, and seamless upgrade of configuration code.
+Complex configuration indeed requires sometimes to restart the master to reload custom steps or code, or just to upgrade the upstream buildbot version.
+
+In this case, you will implement following procedure:
+
+* Start new master(s) with new code and configuration.
+* Send a graceful shutdown to the old master(s).
+* New master(s) will start taking the new jobs, while old master(s) will just finish managing the running builds.
+* As an old master is finishing the running builds, it will drop the connections from the workers, who will then reconnect automatically, and by the mean of load balancer will get connected to a new master to run new jobs.
+
+As buildbot nine has been designed to allow such procedure, it has not been implemented in production yet as we know.
+There is probably a new REST api needed in order to graceful shutdown a master, and the details of gracefully dropping the connection to the workers to be sorted out.

@@ -13,10 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+import sqlalchemy
+
+from twisted.trial import unittest
+
 from buildbot.db import users
 from buildbot.test.fake import fakedb
 from buildbot.test.util import connector_component
-from twisted.trial import unittest
 
 
 class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
@@ -24,7 +30,8 @@ class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
 
     def setUp(self):
         d = self.setUpConnectorComponent(
-            table_names=['users', 'users_info', 'changes', 'change_users'])
+            table_names=['users', 'users_info', 'changes', 'change_users',
+                         'sourcestamps', 'patches'])
 
         def finish_setup(_):
             self.db.users = users.UsersConnectorComponent(self.db)
@@ -148,13 +155,13 @@ class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
                     sorted([tuple(i) for i in infos])
                 ), (
                     [
-                        (1L, u'soap', None, None),
-                        (2L, u'lye', None, None),
-                        (3L, u'marla', u'marla', u'cancer'),
+                        (1, u'soap', None, None),
+                        (2, u'lye', None, None),
+                        (3, u'marla', u'marla', u'cancer'),
                     ], [
-                        (1L, u'IPv9', u'0578cc6.8db024'),
-                        (2L, u'git', u'Tyler Durden <tyler@mayhem.net>'),
-                        (2L, u'irc', u'durden')
+                        (1, u'IPv9', u'0578cc6.8db024'),
+                        (2, u'git', u'Tyler Durden <tyler@mayhem.net>'),
+                        (2, u'irc', u'durden')
                     ]))
             return self.db.pool.do(thd)
         d.addCallback(check_user)
@@ -205,13 +212,15 @@ class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
 
         def check_user(uid):
             # creates a new user
-            self.assertEqual(uid, 2)
+            self.assertNotEqual(uid, 1)
 
             def thd(conn):
                 users_tbl = self.db.model.users
                 users_info_tbl = self.db.model.users_info
-                users = conn.execute(users_tbl.select(order_by=users_tbl.c.identifier)).fetchall()
-                infos = conn.execute(users_info_tbl.select(users_info_tbl.c.uid == uid)).fetchall()
+                users = conn.execute(
+                    users_tbl.select(order_by=users_tbl.c.identifier)).fetchall()
+                infos = conn.execute(
+                    users_info_tbl.select(users_info_tbl.c.uid == uid)).fetchall()
                 self.assertEqual(len(users), 2)
                 self.assertEqual(users[1].uid, uid)
                 self.assertEqual(users[1].identifier, 'soap_2')  # unique'd
@@ -428,12 +437,27 @@ class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
         # the existing transaction) and executes a conflicting insert in that
         # connection.  This will cause the insert in the db method to fail, and
         # the data in this insert (8.8.8.8) will appear below.
+        transaction_wins = []
+        if (self.db.pool.engine.dialect.name == 'sqlite' and
+                self.db.pool.engine.url.database not in [None, ':memory:']):
+            # It's not easy to work with file-based SQLite via multiple
+            # connections, because SQLAlchemy (in it's default configuration)
+            # locks file during working session.
+            # TODO: This probably can be supported.
+            raise unittest.SkipTest(
+                "It's hard to test race condition with not in-memory SQLite")
+
         def race_thd(conn):
             conn = self.db.pool.engine.connect()
-            conn.execute(self.db.model.users_info.insert(),
-                         uid=1, attr_type='IPv4',
-                         attr_data='8.8.8.8')
-
+            try:
+                r = conn.execute(self.db.model.users_info.insert(),
+                                 uid=1, attr_type='IPv4',
+                                 attr_data='8.8.8.8')
+                r.close()
+            except sqlalchemy.exc.OperationalError:
+                # some engine (mysql innodb) will enforce lock until the transaction is over
+                transaction_wins.append(True)
+                # scope variable, we modify a list so that modification is visible in parent scope
         d = self.insertTestData(self.user1_rows)
 
         def update1(_):
@@ -448,7 +472,10 @@ class TestUsersConnectorComponent(connector_component.ConnectorComponentMixin,
 
         def check1(usdict):
             self.assertEqual(usdict['identifier'], 'soap')
-            self.assertEqual(usdict['IPv4'], '8.8.8.8')
+            if transaction_wins:
+                self.assertEqual(usdict['IPv4'], '123.134.156.167')
+            else:
+                self.assertEqual(usdict['IPv4'], '8.8.8.8')
             self.assertEqual(usdict['IPv9'], '0578cc6.8db024')  # no change
         d.addCallback(check1)
         return d

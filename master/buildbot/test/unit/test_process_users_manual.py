@@ -16,13 +16,16 @@
 # this class is known to contain cruft and will be looked at later, so
 # no current implementation utilizes it aside from scripts.runner.
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.process.users import manual
-from buildbot.test.fake import fakedb
+from buildbot.test.fake import fakemaster
 
 
 class ManualUsersMixin(object):
@@ -32,21 +35,8 @@ class ManualUsersMixin(object):
     user managers located in process.users.manual.
     """
 
-    class FakeMaster(object):
-
-        def __init__(self):
-            self.db = fakedb.FakeDBConnector(self)
-            self.protocols = {"pb": {"port": "tcp:9989"}}
-            self.caches = mock.Mock(name="caches")
-            self.caches.get_cache = self.get_cache
-
-        def get_cache(self, cache_name, miss_fn):
-            c = mock.Mock(name=cache_name)
-            c.get = miss_fn
-            return c
-
     def setUpManualUsers(self):
-        self.master = self.FakeMaster()
+        self.master = fakemaster.make_master(testcase=self, wantDb=True)
 
 
 class TestUsersBase(unittest.TestCase):
@@ -267,14 +257,16 @@ class TestCommandlineUserManagerPerspective(unittest.TestCase, ManualUsersMixin)
                                                         ['x@y'], None))
 
         def check(result):
-            exp_format = 'user(s) found:\ngit: x <x@y>\nidentifier: x@y\n' \
-                         'bb_username: None\nuid: 1\n\n'
+            exp_format = ('user(s) found:\nbb_username: None\n'
+                         'git: x <x@y>\nidentifier: x@y\n'
+                         'uid: 1\n\n')
             self.assertEqual(result, exp_format)
         d.addCallback(check)
         return d
 
     def test_perspective_commandline_remove_no_match_format(self):
-        d = self.call_perspective_commandline('remove', None, None, ['x'], None)
+        d = self.call_perspective_commandline(
+            'remove', None, None, ['x'], None)
 
         def check(result):
             exp_format = "user(s) removed:\n"
@@ -299,7 +291,7 @@ class TestCommandlineUserManager(unittest.TestCase, ManualUsersMixin):
         self.manual_component = manual.CommandlineUserManager(username="user",
                                                               passwd="userpw",
                                                               port="9990")
-        self.manual_component.master = self.master
+        self.manual_component.setServiceParent(self.master)
 
     def test_no_userpass(self):
         d = defer.maybeDeferred(lambda: manual.CommandlineUserManager())
@@ -327,6 +319,7 @@ class TestCommandlineUserManager(unittest.TestCase, ManualUsersMixin):
         self.manual_component.startService()
 
         persp = self.got_factory(mock.Mock(), 'user')
-        self.failUnless(isinstance(persp, manual.CommandlineUserManagerPerspective))
+        self.assertTrue(
+            isinstance(persp, manual.CommandlineUserManagerPerspective))
 
         return self.manual_component.stopService()

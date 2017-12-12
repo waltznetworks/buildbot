@@ -13,19 +13,25 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import inspect
-import os
-import shutil
-import sqlalchemy as sa
-import tempfile
 import time
 import traceback
 
-from buildbot.process import metrics
-from twisted.internet import reactor
+import sqlalchemy as sa
+
 from twisted.internet import threads
 from twisted.python import log
 from twisted.python import threadpool
+
+from buildbot.db.buildrequests import AlreadyClaimedError
+from buildbot.db.buildsets import AlreadyCompleteError
+from buildbot.db.changesources import ChangeSourceAlreadyClaimedError
+from buildbot.db.schedulers import SchedulerAlreadyClaimedError
+from buildbot.process import metrics
 
 # set this to True for *very* verbose query debugging output; this can
 # be monkey-patched from master.cfg, too:
@@ -46,7 +52,7 @@ def timed_do_fn(f):
         file, line, name, _ = st[0]
 
         # and its locals
-        frame = inspect.currentframe(1)
+        frame = inspect.currentframe()
         locals = frame.f_locals
 
         # invent a unique ID for the description
@@ -71,38 +77,32 @@ def timed_do_fn(f):
                 log.msg("%s - thd end" % (descr,))
         d = f(callable_wrap, *args, **kwargs)
 
+        @d.addBoth
         def after(x):
             end_time = time.time()
             elapsed = (end_time - start_time) * 1000
             log.msg("%s - after (%0.2f ms elapsed)" % (descr, elapsed))
             return x
-        d.addBoth(after)
         return d
     wrap.__name__ = f.__name__
     wrap.__doc__ = f.__doc__
     return wrap
 
 
-class DBThreadPool(threadpool.ThreadPool):
+class DBThreadPool(object):
 
     running = False
 
-    # Some versions of SQLite incorrectly cache metadata about which tables are
-    # and are not present on a per-connection basis.  This cache can be flushed
-    # by querying the sqlite_master table.  We currently assume all versions of
-    # SQLite have this bug, although it has only been observed in 3.4.2.  A
-    # dynamic check for this bug would be more appropriate.  This is documented
-    # in bug #1810.
-    __broken_sqlite = None
-
-    def __init__(self, engine, verbose=False):
+    def __init__(self, engine, reactor, verbose=False):
         # verbose is used by upgrade scripts, and if it is set we should print
         # messages about versions and other warnings
         log_msg = log.msg
         if verbose:
             def _log_msg(m):
-                print m
+                print(m)
             log_msg = _log_msg
+
+        self.reactor = reactor
 
         pool_size = 5
 
@@ -113,10 +113,10 @@ class DBThreadPool(threadpool.ThreadPool):
         if hasattr(engine, 'optimal_thread_pool_size'):
             pool_size = engine.optimal_thread_pool_size
 
-        threadpool.ThreadPool.__init__(self,
-                                       minthreads=1,
-                                       maxthreads=pool_size,
-                                       name='DBThreadPool')
+        self._pool = threadpool.ThreadPool(minthreads=1,
+                                           maxthreads=pool_size,
+                                           name='DBThreadPool')
+
         self.engine = engine
         if engine.dialect.name == 'sqlite':
             vers = self.get_sqlite_version()
@@ -125,16 +125,11 @@ class DBThreadPool(threadpool.ThreadPool):
                 log_msg("NOTE: this old version of SQLite does not support "
                         "WAL journal mode; a busy master may encounter "
                         "'Database is locked' errors.  Consider upgrading.")
-                if vers < (3, 4):
+                if vers < (3, 6, 19):
                     log_msg("NOTE: this old version of SQLite is not "
                             "supported.")
                     raise RuntimeError("unsupported SQLite version")
-            if self.__broken_sqlite is None:
-                self.__class__.__broken_sqlite = self.detect_bug1810()
-            brkn = self.__broken_sqlite
-            if brkn:
-                log_msg("Applying SQLite workaround from Buildbot bug #1810")
-        self._start_evt = reactor.callWhenRunning(self._start)
+        self._start_evt = self.reactor.callWhenRunning(self._start)
 
         # patch the do methods to do verbose logging if necessary
         if debug:
@@ -144,15 +139,16 @@ class DBThreadPool(threadpool.ThreadPool):
     def _start(self):
         self._start_evt = None
         if not self.running:
-            self.start()
-            self._stop_evt = reactor.addSystemEventTrigger(
+            self._pool.start()
+            self._stop_evt = self.reactor.addSystemEventTrigger(
                 'during', 'shutdown', self._stop)
             self.running = True
 
     def _stop(self):
         self._stop_evt = None
-        self.stop()
-        self.engine.dispose()
+        threads.deferToThreadPool(
+            self.reactor, self._pool, self.engine.dispose)
+        self._pool.stop()
         self.running = False
 
     def shutdown(self):
@@ -161,7 +157,7 @@ class DBThreadPool(threadpool.ThreadPool):
         circumstances."""
         if not self._stop_evt:
             return  # pool is already stopped
-        reactor.removeSystemEventTrigger(self._stop_evt)
+        self.reactor.removeSystemEventTrigger(self._stop_evt)
         self._stop()
 
     # Try about 170 times over the space of a day, with the last few tries
@@ -183,39 +179,36 @@ class DBThreadPool(threadpool.ThreadPool):
                 arg = self.engine
             else:
                 arg = self.engine.contextual_connect()
-
-            if self.__broken_sqlite:  # see bug #1810
-                arg.execute("select * from sqlite_master")
             try:
                 try:
                     rv = callable(arg, *args, **kwargs)
                     assert not isinstance(rv, sa.engine.ResultProxy), \
                         "do not return ResultProxy objects!"
-                except sa.exc.OperationalError, e:
-                    text = e.orig.args[0]
-                    if not isinstance(text, basestring):
+                except sa.exc.OperationalError as e:
+                    if not self.engine.should_retry(e):
+                        log.err(e, 'Got fatal OperationalError on DB')
                         raise
-                    if "Lost connection" in text \
-                            or "database is locked" in text:
-
-                        # see if we've retried too much
-                        elapsed = time.time() - start
-                        if elapsed > self.MAX_OPERATIONALERROR_TIME:
-                            raise
-
-                        metrics.MetricCountEvent.log(
-                            "DBThreadPool.retry-on-OperationalError")
-                        log.msg("automatically retrying query after "
-                                "OperationalError (%ss sleep)" % backoff)
-
-                        # sleep (remember, we're in a thread..)
-                        time.sleep(backoff)
-                        backoff *= self.BACKOFF_MULT
-
-                        # and re-try
-                        continue
-                    else:
+                    elapsed = time.time() - start
+                    if elapsed > self.MAX_OPERATIONALERROR_TIME:
+                        log.err(e, ('Raising due to {0} seconds delay on DB '
+                                    'query retries'.format(self.MAX_OPERATIONALERROR_TIME)))
                         raise
+
+                    metrics.MetricCountEvent.log(
+                        "DBThreadPool.retry-on-OperationalError")
+                    # sleep (remember, we're in a thread..)
+                    time.sleep(backoff)
+                    backoff *= self.BACKOFF_MULT
+                    # and re-try
+                    log.err(e, 'retrying {} after sql error {}'.format(callable, e))
+                    continue
+                # AlreadyClaimedError are normal especially in a multimaster
+                # configuration
+                except (AlreadyClaimedError, ChangeSourceAlreadyClaimedError, SchedulerAlreadyClaimedError, AlreadyCompleteError):
+                    raise
+                except Exception as e:
+                    log.err(e, 'Got fatal Exception on DB')
+                    raise
             finally:
                 if not with_engine:
                     arg.close()
@@ -223,74 +216,13 @@ class DBThreadPool(threadpool.ThreadPool):
         return rv
 
     def do(self, callable, *args, **kwargs):
-        return threads.deferToThreadPool(reactor, self,
+        return threads.deferToThreadPool(self.reactor, self._pool,
                                          self.__thd, False, callable, args, kwargs)
 
     def do_with_engine(self, callable, *args, **kwargs):
-        return threads.deferToThreadPool(reactor, self,
+        return threads.deferToThreadPool(self.reactor, self._pool,
                                          self.__thd, True, callable, args, kwargs)
 
-    def detect_bug1810(self):
-        # detect buggy SQLite implementations; call only for a known-sqlite
-        # dialect
-        try:
-            import pysqlite2.dbapi2 as sqlite
-            sqlite = sqlite
-        except ImportError:
-            import sqlite3 as sqlite
-
-        tmpdir = tempfile.mkdtemp()
-        dbfile = os.path.join(tmpdir, "detect_bug1810.db")
-
-        def test(select_from_sqlite_master=False):
-            conn1 = None
-            conn2 = None
-            try:
-                conn1 = sqlite.connect(dbfile)
-                curs1 = conn1.cursor()
-                curs1.execute("PRAGMA table_info('foo')")
-
-                conn2 = sqlite.connect(dbfile)
-                curs2 = conn2.cursor()
-                curs2.execute("CREATE TABLE foo ( a integer )")
-
-                if select_from_sqlite_master:
-                    curs1.execute("SELECT * from sqlite_master")
-                curs1.execute("SELECT * from foo")
-            finally:
-                if conn1:
-                    conn1.close()
-                if conn2:
-                    conn2.close()
-                os.unlink(dbfile)
-
-        try:
-            test()
-        except sqlite.OperationalError:
-            # this is the expected error indicating it's broken
-            shutil.rmtree(tmpdir)
-            return True
-
-        # but this version should not fail..
-        test(select_from_sqlite_master=True)
-        shutil.rmtree(tmpdir)
-        return False  # not broken - no workaround required
-
     def get_sqlite_version(self):
-        engine = sa.create_engine('sqlite://')
-        conn = engine.contextual_connect()
-
-        try:
-            r = conn.execute("SELECT sqlite_version()")
-            vers_row = r.fetchone()
-            r.close()
-        except:
-            return (0,)
-
-        if vers_row:
-            try:
-                return tuple(map(int, vers_row[0].split('.')))
-            except (TypeError, ValueError):
-                return (0,)
-        else:
-            return (0,)
+        import sqlite3
+        return sqlite3.sqlite_version_info

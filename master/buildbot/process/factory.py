@@ -13,7 +13,11 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import warnings
+from contextlib import contextmanager
 
 from twisted.python import deprecate
 from twisted.python import versions
@@ -22,6 +26,8 @@ from buildbot import interfaces
 from buildbot import util
 from buildbot.process.build import Build
 from buildbot.process.buildstep import BuildStep
+from buildbot.steps.download_secret_to_worker import DownloadSecretsToWorker
+from buildbot.steps.download_secret_to_worker import RemoveWorkerFileSecret
 from buildbot.steps.shell import Compile
 from buildbot.steps.shell import Configure
 from buildbot.steps.shell import PerlModuleTest
@@ -30,9 +36,8 @@ from buildbot.steps.shell import Test
 from buildbot.steps.source.cvs import CVS
 from buildbot.steps.source.svn import SVN
 
+
 # deprecated, use BuildFactory.addStep
-
-
 @deprecate.deprecated(versions.Version("buildbot", 0, 8, 6))
 def s(steptype, **kwargs):
     # convenience function for master.cfg files, to create step
@@ -49,7 +54,7 @@ class BuildFactory(util.ComparableMixin):
     buildClass = Build
     useProgress = 1
     workdir = "build"
-    compare_attrs = ['buildClass', 'steps', 'useProgress', 'workdir']
+    compare_attrs = ('buildClass', 'steps', 'useProgress', 'workdir')
 
     def __init__(self, steps=None):
         self.steps = []
@@ -77,28 +82,57 @@ class BuildFactory(util.ComparableMixin):
             step = step(**kwargs)
         self.steps.append(interfaces.IBuildStepFactory(step))
 
-    def addSteps(self, steps):
+    def addSteps(self, steps, withSecrets=None):
+        if withSecrets is None:
+            withSecrets = []
+        if withSecrets:
+            self.addStep(DownloadSecretsToWorker(withSecrets))
         for s in steps:
             self.addStep(s)
+        if withSecrets:
+            self.addStep(RemoveWorkerFileSecret(withSecrets))
+
+    @contextmanager
+    def withSecrets(self, secrets):
+        self.addStep(DownloadSecretsToWorker(secrets))
+        yield self
+        self.addStep(RemoveWorkerFileSecret(secrets))
 
 # BuildFactory subclasses for common build tools
+
+
+class _DefaultCommand(object):
+    # Used to indicate a default command to the step.
+    pass
 
 
 class GNUAutoconf(BuildFactory):
 
     def __init__(self, source, configure="./configure",
-                 configureEnv={},
-                 configureFlags=[],
+                 configureEnv=None,
+                 configureFlags=None,
                  reconf=None,
-                 compile=["make", "all"],
-                 test=["make", "check"],
-                 distcheck=["make", "distcheck"]):
+                 compile=_DefaultCommand,
+                 test=_DefaultCommand,
+                 distcheck=_DefaultCommand):
+        if configureEnv is None:
+            configureEnv = {}
+        if configureFlags is None:
+            configureFlags = []
+        if compile is _DefaultCommand:
+            compile = ["make", "all"]
+        if test is _DefaultCommand:
+            test = ["make", "check"]
+        if distcheck is _DefaultCommand:
+            distcheck = ["make", "distcheck"]
+
         BuildFactory.__init__(self, [source])
 
         if reconf is True:
             reconf = ["autoreconf", "-si"]
         if reconf is not None:
-            self.addStep(ShellCommand(name="autoreconf", command=reconf))
+            self.addStep(
+                ShellCommand(name="autoreconf", command=reconf, env=configureEnv))
 
         if configure is not None:
             # we either need to wind up with a string (which will be
@@ -115,11 +149,11 @@ class GNUAutoconf(BuildFactory):
                 command = configure + configureFlags
             self.addStep(Configure(command=command, env=configureEnv))
         if compile is not None:
-            self.addStep(Compile(command=compile))
+            self.addStep(Compile(command=compile, env=configureEnv))
         if test is not None:
-            self.addStep(Test(command=test))
+            self.addStep(Test(command=test, env=configureEnv))
         if distcheck is not None:
-            self.addStep(Test(command=distcheck))
+            self.addStep(Test(command=distcheck, env=configureEnv))
 
 
 class CPAN(BuildFactory):
@@ -157,11 +191,15 @@ class Trial(BuildFactory):
     recurse = False
 
     def __init__(self, source,
-                 buildpython=["python"], trialpython=[], trial=None,
+                 buildpython=None, trialpython=None, trial=None,
                  testpath=".", randomly=None, recurse=None,
                  tests=None, useTestCaseNames=False, env=None):
         BuildFactory.__init__(self, [source])
         assert tests or useTestCaseNames, "must use one or the other"
+        if buildpython is None:
+            buildpython = ["python"]
+        if trialpython is None:
+            trialpython = []
         if trial is not None:
             self.trial = trial
         if randomly is not None:
@@ -193,14 +231,17 @@ class BasicBuildFactory(GNUAutoconf):
     # really a "GNU Autoconf-created tarball -in-CVS tree" builder
 
     def __init__(self, cvsroot, cvsmodule,
-                 configure=None, configureEnv={},
+                 configure=None, configureEnv=None,
                  compile="make all",
                  test="make check", cvsCopy=False):
+        if configureEnv is None:
+            configureEnv = {}
         mode = "full"
         method = "clobber"
         if cvsCopy:
             method = "copy"
-        source = CVS(cvsroot=cvsroot, cvsmodule=cvsmodule, mode=mode, method=method)
+        source = CVS(
+            cvsroot=cvsroot, cvsmodule=cvsmodule, mode=mode, method=method)
         GNUAutoconf.__init__(self, source,
                              configure=configure, configureEnv=configureEnv,
                              compile=compile,
@@ -211,9 +252,11 @@ class QuickBuildFactory(BasicBuildFactory):
     useProgress = False
 
     def __init__(self, cvsroot, cvsmodule,
-                 configure=None, configureEnv={},
+                 configure=None, configureEnv=None,
                  compile="make all",
                  test="make check", cvsCopy=False):
+        if configureEnv is None:
+            configureEnv = {}
         mode = "incremental"
         source = CVS(cvsroot=cvsroot, cvsmodule=cvsmodule, mode=mode)
         GNUAutoconf.__init__(self, source,
@@ -225,9 +268,11 @@ class QuickBuildFactory(BasicBuildFactory):
 class BasicSVN(GNUAutoconf):
 
     def __init__(self, svnurl,
-                 configure=None, configureEnv={},
+                 configure=None, configureEnv=None,
                  compile="make all",
                  test="make check"):
+        if configureEnv is None:
+            configureEnv = {}
         source = SVN(svnurl=svnurl, mode="incremental")
         GNUAutoconf.__init__(self, source,
                              configure=configure, configureEnv=configureEnv,

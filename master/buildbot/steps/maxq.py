@@ -13,10 +13,13 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from buildbot import config
 from buildbot.process import buildstep
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
 from buildbot.steps.shell import ShellCommand
 
 
@@ -55,7 +58,7 @@ class MaxQ(ShellCommand):
             return FAILURE
         return SUCCESS
 
-    def getText(self, cmd, results):
+    def getResultSummary(self):
         if self.failures:
-            return [str(self.failures), 'maxq', 'failures']
-        return ['maxq', 'tests']
+            return {u'step': u"%d maxq failures" % self.failures}
+        return {u'step': u'success'}

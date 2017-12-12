@@ -4,12 +4,11 @@ Global Configuration
 The keys in this section affect the operations of the buildmaster globally.
 
 .. contents::
-   :depth: 1
-   :local:
+    :depth: 1
+    :local:
 
 .. bb:cfg:: db
 .. bb:cfg:: db_url
-.. bb:cfg:: db_poll_interval
 
 .. _Database-Specification:
 
@@ -24,18 +23,13 @@ Buildbot accepts a database configuration in a dictionary named ``db``.
 All keys are optional::
 
     c['db'] = {
-        'db_url': 'sqlite:///state.sqlite',
-        'db_poll_interval': 30
+        'db_url' : 'sqlite:///state.sqlite',
     }
 
 The ``db_url`` key indicates the database engine to use.
 The format of this parameter is completely documented at http://www.sqlalchemy.org/docs/dialects/, but is generally of the form::
 
      "driver://[username:password@]host:port/database[?args]"
-
-The optional ``db_poll_interval`` specifies the interval, in seconds, between checks for pending tasks in the database.
-This parameter is generally only useful in multi-master mode.
-See :ref:`Multi-master-mode`.
 
 These parameters can be specified directly in the configuration dictionary, as ``c['db_url']`` and ``c['db_poll_interval']``, although this method is deprecated.
 
@@ -53,11 +47,6 @@ Examples::
 
 SQLite requires no special configuration.
 
-If Buildbot produces "database is locked" exceptions, try adding ``serialize_access=1`` to the DB URL as a workaround::
-
-    c['db_url'] = "sqlite:///state.sqlite?serialize_access=1"
-
-and please file a bug at http://trac.buildbot.net.
 
 .. index:: MySQL
 
@@ -66,7 +55,7 @@ MySQL
 
 .. code-block:: python
 
-   c['db_url'] = "mysql://user:pass@somehost.com/database_name?max_idle=300"
+   c['db_url'] = "mysql://username:password@example.com/database_name?max_idle=300"
 
 The ``max_idle`` argument for MySQL connections is unique to Buildbot, and should be set to something less than the ``wait_timeout`` configured for your server.
 This controls the SQLAlchemy ``pool_recycle`` parameter, which defaults to no timeout.
@@ -74,12 +63,11 @@ Setting this parameter ensures that connections are closed and re-opened after t
 If you see errors such as ``_mysql_exceptions.OperationalError: (2006, 'MySQL server has gone away')``, this means your ``max_idle`` setting is probably too high.
 ``show global variables like 'wait_timeout';`` will show what the currently configured ``wait_timeout`` is on your MySQL server.
 
+
 Buildbot requires ``use_unique=True`` and ``charset=utf8``, and will add them automatically, so they do not need to be specified in ``db_url``.
 
 MySQL defaults to the MyISAM storage engine, but this can be overridden with the ``storage_engine`` URL argument.
 
-Note that, because of InnoDB's extremely short key length limitations, it cannot be used to run Buildbot.
-See http://bugs.mysql.com/bug.php?id=4541 for more information.
 
 .. index:: Postgres
 
@@ -88,9 +76,94 @@ Postgres
 
 .. code-block:: python
 
-    c['db_url'] = "postgresql://username@hostname/dbname"
+    c['db_url'] = "postgresql://username:password@hostname/dbname"
 
 PosgreSQL requires no special configuration.
+
+.. bb:cfg:: mq
+
+.. _MQ-Specification:
+
+MQ Specification
+~~~~~~~~~~~~~~~~
+
+Buildbot uses a message-queueing system to handle communication within the master.
+Messages are used to indicate events within the master, and components that are interested in those events arrange to receive them.
+
+The message queueing implementation is configured as a dictionary in the ``mq`` option.
+The ``type`` key describes the type of MQ implementation to be used.
+Note that the implementation type cannot be changed in a reconfig.
+
+The available implemenetation types are described in the following sections.
+
+Simple
+++++++
+
+.. code-block:: python
+
+    c['mq'] = {
+        'type' : 'simple',
+        'debug' : False,
+    }
+
+This is the default MQ implementation.
+Similar to SQLite, it has no additional software dependencies, but does not support multi-master mode.
+
+Note that this implementation also does not support message persistence across a restart of the master.
+For example, if a change is received, but the master shuts down before the schedulers can create build requests for it, then those schedulers will not be notified of the change when the master starts again.
+
+The ``debug`` key, which defaults to False, can be used to enable logging of every message produced on this master.
+
+.. _mq-Wamp:
+
+Wamp
+++++
+
+.. note::
+
+    At the moment, wamp is the only message queue implementation for multimaster.
+    It has been privileged as this is the only message queue that have very solid support for Twisted.
+    Other more common message queue systems like ``RabbitMQ`` (using the ``AMQP`` protocol) do not have convincing driver for twisted, and this would require to run on threads, which will add an important performance overhead.
+
+.. code-block:: python
+
+    c['mq'] = {
+        'type' : 'wamp',
+        'router_url': 'ws://localhost:8080/ws',
+        'realm': 'realm1',
+        'wamp_debug_level' : 'error' # valid are: none, critical, error, warn, info, debug, trace
+    }
+
+This is a MQ implementation using `wamp <http://wamp.ws/>`_ protocol.
+This implementation uses `Python Autobahn <http://autobahn.ws>`_ wamp client library, and is fully asynchronous (no use of threads).
+To use this implementation, you need a wamp router like `Crossbar <http://crossbar.io>`_.
+
+Please refer to Crossbar documentation for more details, but the default Crossbar setup will just work with Buildbot, provided you use the example ``mq`` configuration above, and start Crossbar with:
+
+.. code-block:: bash
+
+    # of course, you should work in a virtualenv...
+    pip install crossbar
+    crossbar init
+    crossbar start
+
+The implementation does not yet support wamp authentication.
+This MQ allows buildbot to run in multi-master mode.
+
+Note that this implementation also does not support message persistence across a restart of the master.
+For example, if a change is received, but the master shuts down before the schedulers can create build requests for it, then those schedulers will not be notified of the change when the master starts again.
+
+``router_url`` (mandatory): points to your router websocket url.
+    Buildbot is only supporting wamp over websocket, which is a sub-protocol of http.
+    SSL is supported using ``wss://`` instead of ``ws://``.
+
+``realm`` (optional, defaults to ``buildbot``): defines the wamp realm to use for your buildbot messages.
+
+``wamp_debug_level`` (optional, defaults to ``error``): defines the log level of autobahn.
+
+You must use a router with very reliable connection to the master.
+If for some reason, the wamp connection is lost, then the master will stop, and should be restarted via a process manager.
+
 
 .. bb:cfg:: multiMaster
 
@@ -99,46 +172,29 @@ PosgreSQL requires no special configuration.
 Multi-master mode
 ~~~~~~~~~~~~~~~~~
 
-Normally buildbot operates using a single master process that uses the configured database to save state.
+See :ref:`Multimaster` for details on the Multi-master mode in Buildbot Nine.
 
-It is possible to configure buildbot to have multiple master processes that share state in the same database.
-This has been well tested using a MySQL database.
-There are several benefits of Multi-master mode:
+By default, Buildbot makes coherency checks that prevents typo in your ``master.cfg``
+It make sure schedulers are not referencing unknown builders, and enforces there is at least one builder.
 
-* You can have large numbers of build slaves handling the same queue of build requests.
-  A single master can only handle so many slaves (the number is based on a number of factors including type of builds, number of builds, and master and slave IO and CPU capacity--there is no fixed formula).
-  By adding another master which shares the queue of build requests, you can attach more slaves to this additional master, and increase your build throughput.
-
-* You can shut one master down to do maintenance, and other masters will continue to do builds.
-
-State that is shared in the database includes:
-
-* List of changes
-* Scheduler names and internal state
-* Build requests, including the builder name
-
-Because of this shared state, you are strongly encouraged to:
-
-* Ensure that each named scheduler runs on only one master.
-  If the same scheduler runs on multiple masters, it will trigger duplicate builds and may produce other undesirable behaviors.
-
-* Ensure builder names are unique for a given build factory implementation.
-  You can have the same builder name configured on many masters, but if the build factories differ, you will get different results depending on which master claims the build.
-
-One suggested configuration is to have one buildbot master configured with just the scheduler and change sources; and then other masters configured with just the builders.
+In the case of a asymmetric multimaster, those coherency checks can be harmful and prevent you to implement what you want.
+For example you might want to have one master dedicated to the UI, so that a big load generated by builds will not impact page load times.
 
 To enable multi-master mode in this configuration, you will need to set the :bb:cfg:`multiMaster` option so that buildbot doesn't warn about missing schedulers or builders.
-You will also need to set :bb:cfg:`db_poll_interval` to specify the interval (in seconds) at which masters should poll the database for tasks.
 
 ::
 
     # Enable multiMaster mode; disables warnings about unknown builders and
     # schedulers
     c['multiMaster'] = True
-    # Check for new build requests every 60 seconds
     c['db'] = {
         'db_url' : 'mysql://...',
-        'db_poll_interval' : 30,
+    }
+    c['mq'] = {  # Need to enable multimaster aware mq. Wamp is the only option for now.
+        'type' : 'wamp',
+        'router_url': 'ws://localhost:8080',
+        'realm': 'realm1',
+        'wamp_debug_level' : 'error' # valid are: none, critical, error, warn, info, debug, trace
     }
 
 .. bb:cfg:: buildbotURL
@@ -146,15 +202,14 @@ You will also need to set :bb:cfg:`db_poll_interval` to specify the interval (in
 .. bb:cfg:: title
 
 Site Definitions
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 Three basic settings describe the buildmaster in status reports::
 
     c['title'] = "Buildbot"
     c['titleURL'] = "http://buildbot.sourceforge.net/"
-    c['buildbotURL'] = "http://localhost:8010/"
 
-:bb:cfg:`title` is a short string that will appear at the top of this buildbot installation's :class:`html.WebStatus` home page (linked to the :bb:cfg:`titleURL`), and is embedded in the title of the waterfall HTML page.
+:bb:cfg:`title` is a short string that will appear at the top of this buildbot installation's home page (linked to the :bb:cfg:`titleURL`).
 
 :bb:cfg:`titleURL` is a URL string that must end with a slash (``/``).
 HTML status displays will show ``title`` as a link to :bb:cfg:`titleURL`.
@@ -162,33 +217,42 @@ This URL is often used to provide a link from buildbot HTML pages to your projec
 
 The :bb:cfg:`buildbotURL` string should point to the location where the buildbot's internal web server is visible.
 This URL must end with a slash (``/``).
-This typically uses the port number set for the web status (:bb:status:`WebStatus`): the buildbot needs your help to figure out a suitable externally-visible host URL.
 
-When status notices are sent to users (either by email or over IRC), :bb:cfg:`buildbotURL` will be used to create a URL to the specific build or problem that they are being notified about.
-It will also be made available to queriers (over IRC) who want to find out where to get more information about this buildbot.
+When status notices are sent to users (e.g., by email or over IRC), :bb:cfg:`buildbotURL` will be used to create a URL to the specific build or problem that they are being notified about.
 
 .. bb:cfg:: logCompressionLimit
 .. bb:cfg:: logCompressionMethod
 .. bb:cfg:: logMaxSize
 .. bb:cfg:: logMaxTailSize
+.. bb:cfg:: logEncoding
+
+.. _Log-Encodings:
 
 Log Handling
 ~~~~~~~~~~~~
 
 ::
 
-    c['logCompressionLimit'] = 16384
     c['logCompressionMethod'] = 'gz'
     c['logMaxSize'] = 1024*1024 # 1M
     c['logMaxTailSize'] = 32768
+    c['logEncoding'] = 'utf-8'
 
 The :bb:cfg:`logCompressionLimit` enables compression of build logs on disk for logs that are bigger than the given size, or disables that completely if set to ``False``.
 The default value is 4096, which should be a reasonable default on most file systems.
 This setting has no impact on status plugins, and merely affects the required disk space on the master for build logs.
 
 The :bb:cfg:`logCompressionMethod` controls what type of compression is used for build logs.
-The default is 'bz2', and the other valid option is 'gz'.
-'bz2' offers better compression at the expense of more CPU time.
+The default is 'gz', and the other valid option are 'raw' (no compression), 'gz' or 'lz4' (required lz4 package).
+
+Please find below some stats extracted from 50x "trial Pyflakes" runs (results may differ according to log type).
+
+.. csv-table:: Space saving details
+   :header: "compression", "raw log size", "compressed log size", "space saving", "compression speed"
+
+   "bz2", "2.981 MB", "0.603 MB", "79.77%", "3.433 MB/s"
+   "gz", "2.981 MB", "0.568 MB", "80.95%", "6.604 MB/s"
+   "lz4", "2.981 MB", "0.844 MB", "71.68%", "77.668 MB/s"
 
 The :bb:cfg:`logMaxSize` parameter sets an upper limit (in bytes) to how large logs from an individual build step can be.
 The default value is None, meaning no upper limit to the log size.
@@ -198,36 +262,23 @@ If :bb:cfg:`logMaxSize` is set, and the output from a step exceeds the maximum, 
 The effect of setting this parameter is that the log will contain the first :bb:cfg:`logMaxSize` bytes and the last :bb:cfg:`logMaxTailSize` bytes of output.
 Don't set this value too high, as the the tail of the log is kept in memory.
 
+The :bb:cfg:`logEncoding` parameter specifies the character encoding to use to decode bytestrings provided as logs.
+It defaults to ``utf-8``, which should work in most cases, but can be overridden if necessary.
+In extreme cases, a callable can be specified for this parameter.
+It will be called with byte strings, and should return the corresponding Unicode string.
+
+This setting can be overridden for a single build step with the ``logEncoding`` step parameter.
+It can also be overridden for a single log file by passing the ``logEncoding`` parameter to :py:meth:`~buildbot.process.buildstep.addLog`.
+
 Data Lifetime
 ~~~~~~~~~~~~~
-
-.. bb:cfg:: changeHorizon
-.. bb:cfg:: buildHorizon
-.. bb:cfg:: eventHorizon
-.. bb:cfg:: logHorizon
 
 Horizons
 ++++++++
 
-::
+Previously Buildbot implemented a global configuration for horizons.
+Now it is implemented as an utility Builder, and shall be configured via :bb:configurator:`JanitorConfigurator`
 
-    c['changeHorizon'] = 200
-    c['buildHorizon'] = 100
-    c['eventHorizon'] = 50
-    c['logHorizon'] = 40
-    c['buildCacheSize'] = 15
-
-Buildbot stores historical information on disk in the form of "Pickle" files and compressed logfiles.
-In a large installation, these can quickly consume disk space, yet in many cases developers never consult this historical information.
-
-The :bb:cfg:`changeHorizon` key determines how many changes the master will keep a record of.
-One place these changes are displayed is on the waterfall page.
-This parameter defaults to 0, which means keep all changes indefinitely.
-
-The :bb:cfg:`buildHorizon` specifies the minimum number of builds for each builder which should be kept on disk.
-The :bb:cfg:`eventHorizon` specifies the minimum number of events to keep--events mostly describe connections and disconnections of slaves, and are seldom helpful to developers.
-The :bb:cfg:`logHorizon` gives the minimum number of builds for which logs should be maintained; this parameter must be less than or equal to :bb:cfg:`buildHorizon`.
-Builds older than :bb:cfg:`logHorizon` but not older than :bb:cfg:`buildHorizon` will maintain their overall status and the status of each step, but the logfiles will be deleted.
 
 .. bb:cfg:: caches
 .. bb:cfg:: changeCacheSize
@@ -251,7 +302,7 @@ Caches
     }
 
 The :bb:cfg:`caches` configuration key contains the configuration for Buildbot's in-memory caches.
-These caches keep frequently-used objects in memory to avoid unnecessary trips to the database or to pickle files.
+These caches keep frequently-used objects in memory to avoid unnecessary trips to the database.
 Caches are divided by object type, and each has a configurable maximum size.
 
 The default size for each cache is 1, except where noted below.
@@ -302,7 +353,7 @@ The available caches are:
 
     c['buildCacheSize'] = 15
 
-.. bb:cfg:: mergeRequests
+.. bb:cfg:: collapseRequests
 
 .. index:: Builds; merging
 
@@ -311,12 +362,12 @@ Merging Build Requests
 
 .. code-block:: python
 
-   c['mergeRequests'] = True
+   c['collapseRequests'] = True
 
-This is a global default value for builders' :bb:cfg:`mergeRequests` parameter, and controls the merging of build requests.
+This is a global default value for builders' :bb:cfg:`collapseRequests` parameter, and controls the merging of build requests.
 
 This parameter can be overridden on a per-builder basis.
-See :ref:`Merging-Build-Requests` for the allowed values for this parameter.
+See :ref:`Collapsing-Build-Requests` for the allowed values for this parameter.
 
 .. index:: Builders; priority
 
@@ -343,18 +394,18 @@ For that purpose, see :ref:`Prioritizing-Builds`.
 
 .. bb:cfg:: protocols
 
-.. _Setting-the-PB-Port-for-Slaves:
+.. _Setting-the-PB-Port-for-Workers:
 
-Setting the PB Port for Slaves
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Setting the PB Port for Workers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ::
 
     c['protocols'] = {"pb": {"port": 10000}}
 
-The buildmaster will listen on a TCP port of your choosing for connections from buildslaves.
+The buildmaster will listen on a TCP port of your choosing for connections from workers.
 It can also use this port for connections from remote Change Sources, status clients, and debug tools.
-This port should be visible to the outside world, and you'll need to tell your buildslave admins about your choice.
+This port should be visible to the outside world, and you'll need to tell your worker admins about your choice.
 
 It does not matter which port you pick, as long it is externally visible; however, you should probably use something larger than 1024, since most operating systems don't allow non-root processes to bind to low-numbered ports.
 If your buildmaster is behind a firewall or a NAT box of some sort, you may have to configure your firewall to permit inbound connections to this port.
@@ -367,7 +418,7 @@ This means that you can have the buildmaster listen on a localhost-only port by 
 
    c['protocols'] = {"pb": {"port": "tcp:10000:interface=127.0.0.1"}}
 
-This might be useful if you only run buildslaves on the same machine, and they are all configured to contact the buildmaster at ``localhost:10000``.
+This might be useful if you only run workers on the same machine, and they are all configured to contact the buildmaster at ``localhost:10000``.
 
 .. note::
 
@@ -390,20 +441,6 @@ The :bb:cfg:`properties` configuration key defines a dictionary of properties th
        'release-stage' : 'alpha'
    }
 
-.. bb:cfg:: debugPassword
-
-.. _Debug-Options:
-
-Debug Options
-~~~~~~~~~~~~~
-
-If you set :bb:cfg:`debugPassword`, then you can connect to the buildmaster with the diagnostic tool launched by :samp:`buildbot debugclient {MASTER}:{PORT}`.
-From this tool, you can reload the config file, manually force builds, and inject changes, which may be useful for testing your buildmaster without actually committing changes to your repository (or before you have the Change Sources configured.)
-
-The debug tool uses the same port number as the slaves, :bb:cfg:`protocols`, and you may configure its authentication credentials as follows::
-
-    c['debugPassword'] = "debugpassword"
-
 .. index:: Manhole
 
 .. bb:cfg:: manhole
@@ -421,28 +458,29 @@ Two of them use a username+password combination to grant access, one of them use
 
 .. note::
 
-   Using any Manhole requires that ``pycrypto`` and ``pyasn1`` be installed.
+   Using any Manhole requires that ``cryptography`` and ``pyasn1`` be installed.
    These are not part of the normal Buildbot dependencies.
 
 `manhole.AuthorizedKeysManhole`
     You construct this with the name of a file that contains one SSH public key per line, just like :file:`~/.ssh/authorized_keys`.
     If you provide a non-absolute filename, it will be interpreted relative to the buildmaster's base directory.
+    You must also specify a directory which contains an SSH host key for the Manhole server.
 
 `manhole.PasswordManhole`
     This one accepts SSH connections but asks for a username and password when authenticating.
     It accepts only one such pair.
+    You must also specify a directory which contains an SSH host key for the Manhole server.
 
 `manhole.TelnetManhole`
     This accepts regular unencrypted telnet connections, and asks for a username/password pair before providing access.
-    Because this username/password is transmitted in the clear, and because Manhole access to the buildmaster is equivalent to granting full shell privileges to both the buildmaster and all the buildslaves (and to all accounts which then run code produced by the buildslaves), it is  highly recommended that you use one of the SSH manholes instead.
+    Because this username/password is transmitted in the clear, and because Manhole access to the buildmaster is equivalent to granting full shell privileges to both the buildmaster and all the workers (and to all accounts which then run code produced by the workers), it is  highly recommended that you use one of the SSH manholes instead.
 
 ::
 
     # some examples:
     from buildbot.plugins import util
-
-    c['manhole'] = util.AuthorizedKeysManhole(1234, "authorized_keys")
-    c['manhole'] = util.PasswordManhole(1234, "alice", "mysecretpassword")
+    c['manhole'] = util.AuthorizedKeysManhole(1234, "authorized_keys", ssh_hostkey_dir="/data/ssh_host_keys/")
+    c['manhole'] = util.PasswordManhole(1234, "alice", "mysecretpassword", ssh_hostkey_dir="/data/ssh_host_keys/")
     c['manhole'] = util.TelnetManhole(1234, "bob", "snoop_my_password_please")
 
 The :class:`Manhole` instance can be configured to listen on a specific port.
@@ -451,8 +489,7 @@ You may wish to have this listening port bind to the loopback interface (sometim
 ::
 
     from buildbot.plugins import util
-
-    c['manhole'] = util.PasswordManhole("tcp:9999:interface=127.0.0.1", "admin", "passwd")
+    c['manhole'] = util.PasswordManhole("tcp:9999:interface=127.0.0.1","admin","passwd", ssh_hostkey_dir="/data/ssh_host_keys/")
 
 To have the :class:`Manhole` listen on all interfaces, use ``"tcp:9999"`` or simply 9999.
 This port specification uses ``twisted.application.strports``, so you can make it listen on SSL or even UNIX-domain sockets if you want.
@@ -496,7 +533,6 @@ A manhole session might look like::
                         change_svc : <type 'instance'>
                     configFileName : master.cfg
                                 db : <class 'buildbot.db.connector.DBConnector'>
-                  db_poll_interval : None
                             db_url : sqlite:///state.sqlite
                                   ...
     >>> show(master.botmaster.builders['win32'])
@@ -529,6 +565,358 @@ This value can also be changed via a reconfig.
 
 Read more about metrics in the :ref:`Metrics` section in the developer documentation.
 
+.. bb:cfg:: stats-service
+
+Statistics Service
+~~~~~~~~~~~~~~~~~~
+
+The Statistics Service (stats service for short) supports for collecting arbitrary data from within a running Buildbot instance and export it do a number of storage backends.
+Currently, only `InfluxDB`_ is supported as a storage backend.
+Also, InfluxDB (or any other storage backend) is not a mandatory dependency.
+Buildbot can run without it although :class:`StatsService` will be of no use in such a case.
+At present, :class:`StatsService` can keep track of build properties, build times (start, end, duration) and arbitrary data produced inside Buildbot (more on this later).
+
+Example usage:
+
+.. code-block:: python
+
+    captures = [stats.CaptureProperty('Builder1', 'tree-size-KiB'),
+                stats.CaptureBuildDuration('Builder2')]
+    c['services'] = []
+    c['services'].append(stats.StatsService(
+        storage_backends=[
+            stats.InfluxStorageService('localhost', 8086, 'root', 'root', 'test', captures)
+        ], name="StatsService"))
+
+The ``services`` configuration value should be initialized as a list and a :class:`StatsService` instance should be appended to it as shown in the example above.
+
+Statistics Service
+++++++++++++++++++
+
+.. py:class:: buildbot.statistics.stats_service.StatsService
+   :noindex:
+
+   This is the main class for statistics service.
+   It is initialized in the master configuration as show in the example above.
+   It takes two arguments:
+
+   ``storage_backends``
+     A list of storage backends (see :ref:`storage-backends`).
+     In the example above, ``stats.InfluxStorageService`` is an instance of a storage backend.
+     Each storage backend is an instances of subclasses of :py:class:`statsStorageBase`.
+   ``name``
+     The name of this service.
+
+:py:meth:`yieldMetricsValue`: This method can be used to send arbitrary data for storage. (See :ref:`yieldMetricsValue` for more information.)
+
+.. _capture-classes:
+
+Capture Classes
++++++++++++++++
+
+.. py:class:: buildbot.statistics.capture.CaptureProperty
+   :noindex:
+
+   Instance of this class declares which properties must be captured and sent to the :ref:`storage-backends`.
+   It takes the following arguments:
+
+   ``builder_name``
+     The name of builder in which the property is recorded.
+   ``property_name``
+     The name of property needed to be recorded as a statistic.
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in two arguments - `build_properties` (dict) and `property_name` (str) and return a string that will be sent for storage in the storage backends.
+   ``regex=False``
+     If this is set to ``True``, then the property name can be a regular expression.
+     All properties matching this regular expression will be sent for storage.
+
+.. py:class:: buildbot.statistics.capture.CapturePropertyAllBuilders
+   :noindex:
+
+   Instance of this class declares which properties must be captured on all builders and sent to the :ref:`storage-backends`.
+   It takes the following arguments:
+
+   ``property_name``
+     The name of property needed to be recorded as a statistic.
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in two arguments - `build_properties` (dict) and `property_name` (str) and return a string that will be sent for storage in the storage backends.
+   ``regex=False``
+     If this is set to ``True``, then the property name can be a regular expression.
+     All properties matching this regular expression will be sent for storage.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildStartTime
+   :noindex:
+
+   Instance of this class declares which builders' start times are to be captured and sent to :ref:`storage-backends`.
+   It takes the following arguments:
+
+   ``builder_name``
+     The name of builder whose times are to be recorded.
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in a Python datetime object and return a string that will be sent for storage in the storage backends.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildStartTimeAllBuilders
+   :noindex:
+
+   Instance of this class declares start times of all builders to be captured and sent to :ref:`storage-backends`.
+   It takes the following arguments:
+
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in a Python datetime object and return a string that will be sent for storage in the storage backends.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildEndTime
+   :noindex:
+
+   Exactly like :py:class:`CaptureBuildStartTime` except it declares the builders whose end time is to be recorded.
+   The arguments are same as :py:class:`CaptureBuildStartTime`.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildEndTimeAllBuilders
+   :noindex:
+
+   Exactly like :py:class:`CaptureBuildStartTimeAllBuilders` except it declares all builders' end time to be recorded.
+   The arguments are same as :py:class:`CaptureBuildStartTimeAllBuilders`.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildDuration
+   :noindex:
+
+   Instance of this class declares the builders whose build durations are to be recorded.
+   It takes the following arguments:
+
+   ``builder_name``
+     The name of builder whose times are to be recorded.
+   ``report_in='seconds'``
+     Can be one of three: ``'seconds'``, ``'minutes'``, or ``'hours'``.
+     This is the units in which the build time will be reported.
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in two Python datetime objects - a ``start_time`` and an ``end_time`` and return a string that will be sent for storage in the storage backends.
+
+.. py:class:: buildbot.statistics.capture.CaptureBuildDurationAllBuilders
+   :noindex:
+
+   Instance of this class declares build durations to be recorded for all builders.
+   It takes the following arguments:
+
+   ``report_in='seconds'``
+     Can be one of three: ``'seconds'``, ``'minutes'``, or ``'hours'``.
+     This is the units in which the build time will be reported.
+   ``callback=None``
+     (Optional) A custom callback function for this class.
+     This callback function should take in two Python datetime objects - a ``start_time`` and an ``end_time`` and return a string that will be sent for storage in the storage backends.
+
+.. py:class:: buildbot.statistics.capture.CaptureData
+   :noindex:
+
+   Instance of this capture class is for capturing arbitrary data that is not stored as build-data.
+   Needs to be used in conjunction with ``yieldMetricsValue`` (See :ref:`yieldMetricsValue`).
+   Takes the following arguments:
+
+   ``data_name``
+     The name of data to be captured.
+     Same as in ``yieldMetricsValue``.
+   ``builder_name``
+     The name of builder whose times are to be recorded.
+   ``callback=None``
+     The callback function for this class.
+     This callback receives the data sent to  ``yieldMetricsValue`` as ``post_data`` (See :ref:`yieldMetricsValue`).
+     It must return a string that is to be sent to the storage backends for storage.
+
+.. py:class:: buildbot.statistics.capture.CaptureDataAllBuilders
+   :noindex:
+
+   Instance of this capture class for capturing arbitrary data that is not stored as build-data on all builders.
+   Needs to be used in conjunction with ``yieldMetricsValue`` (See :ref:`yieldMetricsValue`).
+   Takes the following arguments:
+
+   ``data_name``
+     The name of data to be captured.
+     Same as in ``yieldMetricsValue``.
+   ``callback=None``
+     The callback function for this class.
+     This callback receives the data sent to  ``yieldMetricsValue`` as ``post_data`` (See :ref:`yieldMetricsValue`).
+     It must return a string that is to be sent to the storage backends for storage.
+
+.. _yieldMetricsValue:
+
+Using ``StatsService.yieldMetricsValue``
+++++++++++++++++++++++++++++++++++++++++
+
+Advanced users can modify ``BuildSteps`` to use ``StatsService.yieldMetricsValue`` which will send arbitrary data for storage to the ``StatsService``.
+It takes the following arguments:
+
+   ``data_name``
+     The name of the data being sent or storage.
+   ``post_data``
+     A dictionary of key value pair that is sent for storage.
+     The keys will act as columns in a database and the value is stored under that column.
+   ``buildid``
+     The integer build id of the current build.
+     Obtainable in all ``BuildSteps``.
+
+Along with using ``yieldMetricsValue``, the user will also need to use the ``CaptureData`` capture class.
+As an example, we can add the following to a build step:
+
+.. code-block:: python
+
+    yieldMetricsValue('test_data_name', {'some_data': 'some_value'}, buildid)
+
+Then, we can add in the master configuration a capture class like this:
+
+.. code-block:: python
+
+    captures = [CaptureBuildData('test_data_name', 'Builder1')]
+
+Pass this ``captures`` list to a storage backend (as shown in the example at the top of this section) for capturing this data.
+
+.. _storage-backends:
+
+Storage Backends
+++++++++++++++++
+
+Storage backends are responsible for storing any statistics data sent to them.
+A storage backend will generally be some sort of a database-server running on a machine.
+(*Note*: This machine may be different from the one running :class:`BuildMaster`)
+
+Currently, only `InfluxDB`_ is supported as a storage backend.
+
+.. py:class:: buildbot.statistics.storage_backends.influxdb_client.InfluxStorageService
+   :noindex:
+
+   This class is a Buildbot client to the InfluxDB storage backend. `InfluxDB`_ is a distributed, time series database that employs a key-value pair storage system.
+
+   It requires the following arguments:
+
+   ``url``
+     The URL where the service is running.
+   ``port``
+     The port on which the service is listening.
+   ``user``
+     Username of a InfluxDB user.
+   ``password``
+     Password for ``user``.
+   ``db``
+     The name of database to be used.
+   ``captures``
+     A list of objects of :ref:`capture-classes`.
+     This tells which statistics are to be stored in this storage backend.
+   ``name=None``
+     (Optional) The name of this storage backend.
+
+.. bb:cfg:: secretsProviders
+
+``secretsProviders``
+~~~~~~~~~~~~~~~~~~~~
+
+see :ref:`secretManagement` for details on secret concepts.
+
+Example usage:
+
+.. code-block:: python
+
+    c['secretsProviders'] = [ .. ]
+
+``secretsProviders`` is a  list of secrets storage.
+See :ref:`secretManagement` to configure an available secret storage provider.
+
+
+.. bb:cfg:: buildbotNetUsageData
+
+BuildbotNetUsageData
+~~~~~~~~~~~~~~~~~~~~
+
+Since buildbot 0.9.0, buildbot has a simple feature which sends usage analysis info to buildbot.net.
+This is very important for buildbot developers to understand how the community is using the tools.
+This allows to better prioritize issues, and understand what plugins are actually being used.
+This will also be a tool to decide whether to keep support for very old tools.
+For example buildbot contains support for the venerable CVS, but we have no information whether it actually works beyond the unit tests.
+We rely on the community to test and report issues with the old features.
+
+With BuildbotNetUsageData, we can know exactly what combination of plugins are working together, how much people are customizing plugins, what versions of the main dependencies people run.
+
+We take your privacy very seriously.
+
+BuildbotNetUsageData will never send information specific to your Code or Intellectual Property.
+No repository url, shell command values, host names, ip address or custom class names.
+If it does, then this is a bug, please report.
+
+We still need to track unique number for installation.
+This is done via doing a sha1 hash of master's hostname, installation path and fqdn.
+Using a secure hash means there is no way of knowing hostname, path and fqdn given the hash, but still there is a different hash for each master.
+
+You can see exactly what is sent in the master's twisted.log.
+Usage data is sent every time the master is started.
+
+BuildbotNetUsageData can be configured with 4 values:
+
+* ``c['buildbotNetUsageData'] = None`` disables the feature
+
+* ``c['buildbotNetUsageData'] = 'basic'`` sends the basic information to buildbot including:
+
+    * versions of buildbot, python and twisted
+    * platform information (CPU, OS, distribution, python flavor (i.e CPython vs PyPy))
+    * mq and database type (mysql or sqlite?)
+    * www plugins usage
+    * Plugins usages:
+      This counts the number of time each class of buildbot is used in your configuration.
+      This counts workers, builders, steps, schedulers, change sources.
+      If the plugin is subclassed, then it will be prefixed with a `>`
+
+    example of basic report (for the metabuildbot):
+
+    .. code-block:: javascript
+
+        {
+        'versions': {
+            'Python': '2.7.6',
+            'Twisted': '15.5.0',
+            'Buildbot': '0.9.0rc2-176-g5fa9dbf'
+        },
+        'platform': {
+            'machine': 'x86_64',
+            'python_implementation': 'CPython',
+            'version': '#140-Ubuntu SMP Mon Jul',
+            'processor':
+            'x86_64',
+            'distro:': ('Ubuntu', '14.04', 'trusty')
+            },
+        'db': 'sqlite',
+        'mq': 'simple',
+        'plugins': {
+            'buildbot.schedulers.forcesched.ForceScheduler': 2,
+            'buildbot.schedulers.triggerable.Triggerable': 1,
+            'buildbot.config.BuilderConfig': 4,
+            'buildbot.schedulers.basic.AnyBranchScheduler': 2,
+            'buildbot.steps.source.git.Git': 4,
+            '>>buildbot.steps.trigger.Trigger': 2,
+            '>>>buildbot.worker.base.Worker': 4,
+            'buildbot.reporters.irc.IRC': 1,
+            '>>>buildbot.process.buildstep.LoggingBuildStep': 2},
+        'www_plugins': ['buildbot_travis', 'waterfall_view']
+        }
+
+* ``c['buildbotNetUsageData'] = 'full'`` sends the basic information plus additional information:
+
+    * configuration of each builders: how the steps are arranged together. for ex:
+
+    .. code-block:: javascript
+
+        {
+            'builders': [
+                ['buildbot.steps.source.git.Git', '>>>buildbot.process.buildstep.LoggingBuildStep'],
+                ['buildbot.steps.source.git.Git', '>>buildbot.steps.trigger.Trigger'],
+                ['buildbot.steps.source.git.Git', '>>>buildbot.process.buildstep.LoggingBuildStep'],
+                ['buildbot.steps.source.git.Git', '>>buildbot.steps.trigger.Trigger']]
+        }
+
+* ``c['buildbotNetUsageData'] = myCustomFunction``. You can also specify exactly what to send using a callback.
+
+    The custom function will take the generated data from full report in the form of a dictionary, and return a customized report as a jsonable dictionary. You can use this to filter any information you don't want to disclose. You can use a custom http_proxy environment variable in order to not send any data while developing your callback.
+
+
 .. bb:cfg:: user_managers
 
 .. _Users-Options:
@@ -539,7 +927,6 @@ Users Options
 ::
 
     from buildbot.plugins import util
-
     c['user_managers'] = []
     c['user_managers'].append(util.CommandlineUserManager(username="user",
                                                           passwd="userpw",
@@ -572,14 +959,14 @@ Input Validation
 
     import re
     c['validation'] = {
-        'branch': re.compile(r'^[\w.+/~-]*$'),
-        'revision': re.compile(r'^[ \w\.\-\/]*$'),
-        'property_name': re.compile(r'^[\w\.\-\/\~:]*$'),
-        'property_value': re.compile(r'^[\w\.\-\/\~:]*$'),
+        'branch' : re.compile(r'^[\w.+/~-]*$'),
+        'revision' : re.compile(r'^[ \w\.\-\/]*$'),
+        'property_name' : re.compile(r'^[\w\.\-\/\~:]*$'),
+        'property_value' : re.compile(r'^[\w\.\-\/\~:]*$'),
     }
 
 This option configures the validation applied to user inputs of various types.
-This validation is important since these values are often included in command-line arguments executed on slaves.
+This validation is important since these values are often included in command-line arguments executed on workers.
 Allowing arbitrary input from untrusted users may raise security concerns.
 
 The keys describe the type of input validated; the values are compiled regular expressions against which the input will be matched.
@@ -599,7 +986,7 @@ The callable takes the revision id and repository argument, and should return an
 Note that the revision id may not always be in the form you expect, so code defensively.
 In particular, a revision of "??" may be supplied when no other information is available.
 
-Note that :class:`SourceStamp`\s that are not created from version-control changes (e.g., those created by a Nightly or Periodic scheduler) may have an empty repository string, if the repository is not known to the scheduler.
+Note that :class:`SourceStamp`\s that are not created from version-control changes (e.g., those created by a :bb:sched:`Nightly` or :bb:sched:`Periodic` scheduler) may have an empty repository string, if the repository is not known to the scheduler.
 
 Revision Link Helpers
 +++++++++++++++++++++
@@ -614,13 +1001,10 @@ The results are the substituted into the replacement text, along with the revisi
 ::
 
         from buildbot.plugins import util
-
         c['revlink'] = util.RevlinkMatch([r'git://notmuchmail.org/git/(.*)'],
-                                         r'http://git.notmuchmail.org/git/\1/commit/%s')
+                                          r'http://git.notmuchmail.org/git/\1/commit/%s')
 
 :class:`buildbot.revlinks.RevlinkMultiplexer` takes a list of revision link callables, and tries each in turn, returning the first successful match.
-
-.. _TwistedConch: http://twistedmatrix.com/trac/wiki/TwistedConch
 
 .. bb:cfg:: codebaseGenerator
 
@@ -649,3 +1033,6 @@ If changes come from different repositories, extra processing will be needed to 
 This codebase will then be a logical name for the combination of repository and or branch etc.
 
 The `codebaseGenerator` accepts a change dictionary as produced by the :py:class:`buildbot.db.changes.ChangesConnectorComponent <changes connector component>`, with a changeid equal to `None`.
+
+.. _TwistedConch: http://twistedmatrix.com/trac/wiki/TwistedConch
+.. _InfluxDB: https://influxdata.com/time-series-platform/influxdb/

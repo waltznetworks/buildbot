@@ -27,7 +27,7 @@ described in :ref:`developer-Reconfiguration`.
     - removing those concerns from other parts of Buildbot.
 
     This class may be instantiated directly, creating an entirely default
-    configuration, or via :py:meth:`loadConfig`, which will load the
+    configuration, or via :py:meth:`FileLoader.loadConfig`, which will load the
     configuration from a config file.
 
     The following attributes are available from this class, representing the
@@ -46,21 +46,6 @@ described in :ref:`developer-Reconfiguration`.
         The URL of this buildmaster, for use in constructing WebStatus URLs;
         from :bb:cfg:`buildbotURL`.
 
-    .. py:attribute:: changeHorizon
-
-        The current change horizon, from :bb:cfg:`changeHorizon`.
-
-    .. py:attribute:: eventHorizon
-
-        The current event horizon, from :bb:cfg:`eventHorizon`.
-
-    .. py:attribute:: logHorizon
-
-        The current log horizon, from :bb:cfg:`logHorizon`.
-
-    .. py:attribute:: buildHorizon
-
-        The current build horizon, from :bb:cfg:`buildHorizon`.
 
     .. py:attribute:: logCompressionLimit
 
@@ -79,15 +64,19 @@ described in :ref:`developer-Reconfiguration`.
 
         The current log maximum size, from :bb:cfg:`logMaxTailSize`.
 
+    .. py:attribute:: logEncoding
+
+        The encoding to expect when logs are provided as bytestrings, from :bb:cfg:`logEncoding`.
+
     .. py:attribute:: properties
 
         A :py:class:`~buildbot.process.properties.Properties` instance
         containing global properties, from :bb:cfg:`properties`.
 
-    .. py:attribute:: mergeRequests
+    .. py:attribute:: collapseRequests
 
-        A callable, or True or False, describing how to merge requests; from
-        :bb:cfg:`mergeRequests`.
+        A callable, or True or False, describing how to collapse requests; from
+        :bb:cfg:`collapseRequests`.
 
     .. py:attribute:: prioritizeBuilders
 
@@ -95,25 +84,20 @@ described in :ref:`developer-Reconfiguration`.
         :bb:cfg:`prioritizeBuilders`.
 
     .. py:attribute:: codebaseGenerator
-    
-        A callable, or None, used to determine the codebase from an incoming 
+
+        A callable, or None, used to determine the codebase from an incoming
         :py:class:`~buildbot.changes.changes.Change`,
         from :bb:cfg:`codebaseGenerator`
-        
+
     .. py:attribute:: protocols
 
-        The per-protocol port specification for slave connections.
+        The per-protocol port specification for worker connections.
         Based on :bb:cfg:`protocols`.
 
     .. py:attribute:: multiMaster
 
         If true, then this master is part of a cluster; based on
         :bb:cfg:`multiMaster`.
-
-    .. py:attribute:: debugPassword
-
-        The password for the debug client, or None; from
-        :bb:cfg:`debugPassword`.
 
     .. py:attribute:: manhole
 
@@ -129,9 +113,8 @@ described in :ref:`developer-Reconfiguration`.
 
     .. py:attribute:: db
 
-        Database specification, a dictionary with keys :bb:cfg:`db_url` and
-        :bb:cfg:`db_poll_interval`.  It is safe to assume that both keys are
-        present.
+        Database specification, a dictionary with key :bb:cfg:`db_url`.  It is
+        safe to assume that this key is present.
 
     .. py:attribute:: metrics
 
@@ -157,41 +140,71 @@ described in :ref:`developer-Reconfiguration`.
         :bb:cfg:`builders`.  Builders specified as dictionaries in the
         configuration file are converted to instances.
 
-    .. py:attribute:: slaves
+    .. py:attribute:: workers
 
-        The list of :py:class:`BuildSlave` instances from
-        :bb:cfg:`slaves`.
+        The list of :py:class:`Worker` instances from
+        :bb:cfg:`workers`.
 
     .. py:attribute:: change_sources
 
         The list of :py:class:`IChangeSource` providers from
         :bb:cfg:`change_source`.
 
-    .. py:attribute:: status
-
-        The list of :py:class:`IStatusReceiver` providers from
-        :bb:cfg:`status`.
 
     .. py:attribute:: user_managers
 
         The list of user managers providers from :bb:cfg:`user_managers`.
 
-    Loading of the configuration file is generally triggered by the master,
-    using the following methods:
+    .. py:attribute:: www
 
-    .. py:classmethod:: loadConfig(basedir, filename)
+        The web server configuration from :bb:cfg:`www`.  The keys ``port`` and
+        ``url`` are always available.
+
+    .. py:attribute:: services
+
+        The list of additional plugin services
+
+    .. py:classmethod:: loadFromDict(config_dict, filename)
+
+        :param dict config_dict: The dictionary containing the configuration to load.
+        :param string filename: The filename to use when reporting errors.
+        :returns: new :py:class:`MasterConfig` instance
+
+        Load the configuration from the given dictionary.
+
+
+Loading of the configuration file is generally triggered by the master,
+using the following class:
+
+.. py:class:: FileLoader
+
+    .. py:method:: __init__(basedir, filename)
 
         :param string basedir: directory to which config is relative
         :param string filename: the configuration file to load
-        :raises: :py:exc:`ConfigErrors` if any errors occur
+
+        The filename is treated as relative to the basedir, if it is not
+        absolute.
+
+    .. py:method:: loadConfig(basedir, filename)
+
         :returns: new :py:class:`MasterConfig` instance
 
         Load the configuration in the given file.  Aside from syntax errors,
         this will also detect a number of semantic errors such as multiple
         schedulers with the same name.
 
-        The filename is treated as relative to the basedir, if it is not
-        absolute.
+.. py:function:: loadConfigDict(basedir, filename)
+
+    :param string basedir: directory to which config is relative
+    :param string filename: the configuration file to load
+    :raises: :py:exc:`ConfigErrors` if any errors occur
+    :returns dict: The ``BuildmasterConfig`` dictionary.
+
+    Load the configuration dictionary in the given file.
+
+    The filename is treated as relative to the basedir, if it is not
+    absolute.
 
 Builder Configuration
 ---------------------
@@ -213,26 +226,26 @@ Builder Configuration
 
         The builder's factory.
 
-    .. py:attribute:: slavenames
+    .. py:attribute:: workernames
 
-        The builder's slave names (a list, regardless of whether the names were
-        specified with ``slavename`` or ``slavenames``).
+        The builder's worker names (a list, regardless of whether the names were
+        specified with ``workername`` or ``workernames``).
 
     .. py:attribute:: builddir
 
         The builder's builddir.
 
-    .. py:attribute:: slavebuilddir
+    .. py:attribute:: workerbuilddir
 
-        The builder's slave-side builddir.
+        The builder's worker-side builddir.
 
     .. py:attribute:: category
 
         The builder's category.
 
-    .. py:attribute:: nextSlave
+    .. py:attribute:: nextWorker
 
-        The builder's nextSlave callable.
+        The builder's nextWorker callable.
 
     .. py:attribute:: nextBuild
 
@@ -248,15 +261,15 @@ Builder Configuration
 
     .. py:attribute:: env
 
-        The builder's environmnet variables.
+        The builder's environment variables.
 
     .. py:attribute:: properties
 
         The builder's properties, as a dictionary.
 
-    .. py:attribute:: mergeRequests
+    .. py:attribute:: collapseRequests
 
-        The builder's mergeRequests callable.
+        The builder's collapseRequests callable.
 
     .. py:attribute:: description
 
@@ -268,7 +281,7 @@ Error Handling
 If any errors are encountered while loading the configuration :py:func:`buildbot.config.error`
 should be called. This can occur both in the configuration-loading code,
 and in the constructors of any objects that are instantiated in the
-configuration - change sources, slaves, schedulers, build steps, and so on.
+configuration - change sources, workers, schedulers, build steps, and so on.
 
 .. py:function:: error(error)
 
@@ -298,6 +311,47 @@ configuration - change sources, slaves, schedulers, build steps, and so on.
 
         Add another error message to the (presumably not-yet-raised) exception.
 
+
+Configuration in AngularJS
+==========================
+
+The AngularJS frontend often needs access to the local master configuration.
+This is accomplished automatically by converting various pieces of the master configuration to a dictionary.
+
+The :py:class:`~buildbot.interfaces.IConfigured` interface represents a way to convert any object into a JSON-able dictionary.
+
+.. class:: buildbot.interfaces.IConfigured
+
+    Providers of this interface provide a method to get their configuration as a dictionary:
+
+   .. method:: getConfigDict()
+
+        :returns: object
+
+        Return the configuration of this object.
+        Note that despite the name, the return value may not be a dictionary.
+
+    Any object can be "cast" to an :py:class:`~buildbot.interfaces.IConfigured` provider.
+    The ``getConfigDict`` method for basic Python objects simply returns the value. ::
+
+        IConfigured(someObject).getConfigDict()
+
+.. py:class:: buildbot.util.ConfiguredMixin
+
+    This class is a basic implementation of :py:class:`~buildbot.interfaces.IConfigured`.
+    Its :py:meth:`getConfigDict` method simply returns the instance's ``name`` attribute.
+
+    .. py:attribute:: name
+
+        Each object configured must have a ``name`` attribute.
+
+    .. py:method:: getConfigDict(self)
+
+        :returns: object
+
+        Return a config dictionary representing this object.
+
+All of this is used by to serve ``/config.js`` to the JavaScript frontend.
 
 .. _developer-Reconfiguration:
 
@@ -329,17 +383,19 @@ components in Buildbot.
     reconfig support in Buildbot is intended for "intermediate" uses of the
     software, where there are fewer surprises.
 
+.. index:: Service Mixins; ReconfigurableServiceMixin
+
 Reconfigurable Services
 .......................
 
 Instances which need to be notified of a change in configuration should be
 implemented as Twisted services, and mix in the
 :py:class:`ReconfigurableServiceMixin` class, overriding the
-:py:meth:`~ReconfigurableServiceMixin.reconfigService` method.
+:py:meth:`~ReconfigurableServiceMixin.reconfigServiceWithBuildbotConfig` method.
 
 .. py:class:: ReconfigurableServiceMixin
 
-    .. py:method:: reconfigService(new_config)
+    .. py:method:: reconfigServiceWithBuildbotConfig(new_config)
 
         :param new_config: new master configuration
         :type new_config: :py:class:`MasterConfig`
@@ -410,17 +466,11 @@ configuration changes.
 
 If, during a reconfiguration, a new and old scheduler's fully qualified class
 names differ, then the old class will be stopped and the new class started.
-This supports the case when a user changes, for example, a Nightly scheduler to
-a Periodic scheduler without changing the name.
+This supports the case when a user changes, for example, a :bb:sched:`Nightly` scheduler to a :bb:sched:`Periodic` scheduler without changing the name.
 
 Because Buildbot uses :py:class:`~buildbot.schedulers.base.BaseScheduler`
 instances directly in the configuration file, a reconfigured scheduler must
 extract its new configuration information from another instance of itself.
-:py:class:`~buildbot.schedulers.base.BaseScheduler` implements a helper method,
-:py:meth:`~buildbot.schedulers.base.BaseScheduler.findNewSchedulerInstance`,
-which will return the new instance of the scheduler in the given
-:py:class:`MasterConfig` object.
-
 
 Custom Subclasses
 ~~~~~~~~~~~~~~~~~
@@ -442,24 +492,22 @@ One workaround for this is to change the name of the scheduler before each
 reconfig - this will cause the old scheduler to be stopped, and the new
 scheduler (with the new name and class) to be started.
 
-Slaves
-......
+Workers
+.......
 
-Similar to schedulers, slaves are specified by name, so new and old
-configurations are first compared by name, and any slaves to be added or
-removed are noted.  Slaves for which the fully-qualified class name has changed
-are also added and removed.  All slaves have their
+Similar to schedulers, workers are specified by name, so new and old
+configurations are first compared by name, and any workers to be added or
+removed are noted.  Workers for which the fully-qualified class name has changed
+are also added and removed.  All workers have their
 :py:meth:`~ReconfigurableServiceMixin.reconfigService` method called.
 
-This method takes care of the basic slave attributes, including changing the PB
+This method takes care of the basic worker attributes, including changing the PB
 registration if necessary.  Any subclasses that add configuration parameters
 should override :py:meth:`~ReconfigurableServiceMixin.reconfigService` and
 update those parameters.  As with Schedulers, because the
-:py:class:`~buildbot.buildslave.AbstractBuildSlave` instance is given directly
+:py:class:`~buildbot.worker.AbstractWorker` instance is given directly
 in the configuration, on reconfig instances must extract the configuration from
-a new instance.  The
-:py:meth:`~buildbot.buildslave.AbstractBuildSlave.findNewSlaveInstance` method
-can be used to find the new instance.
+a new instance.
 
 User Managers
 .............
@@ -472,5 +520,3 @@ Status Receivers
 ................
 
 At every reconfig, all status listeners are stopped and new versions started.
-
-

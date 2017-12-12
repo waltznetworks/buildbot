@@ -13,41 +13,46 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import os
 import sys
 
 from buildbot import config
 from buildbot.scripts.base import getConfigFileFromTac
+from buildbot.util import in_reactor
 
 
 def _loadConfig(basedir, configFile, quiet):
     try:
-        config.MasterConfig.loadConfig(
-            basedir, configFile)
-    except config.ConfigErrors, e:
+        config.FileLoader(basedir, configFile).loadConfig()
+    except config.ConfigErrors as e:
         if not quiet:
-            print >> sys.stderr, "Configuration Errors:"
+            print("Configuration Errors:", file=sys.stderr)
             for e in e.errors:
-                print >> sys.stderr, "  " + e
+                print("  " + e, file=sys.stderr)
         return 1
 
     if not quiet:
-        print "Config file is good!"
+        print("Config file is good!")
     return 0
 
 
+@in_reactor
 def checkconfig(config):
     quiet = config.get('quiet')
-    configFile = config.get('configFile')
+    configFile = config.get('configFile', os.getcwd())
 
     if os.path.isdir(configFile):
         basedir = configFile
         try:
-            configFile = getConfigFileFromTac(basedir)
-        except (SyntaxError, ImportError), e:
+            configFile = getConfigFileFromTac(basedir, quiet=quiet)
+        except Exception:
             if not quiet:
-                print "Unable to load 'buildbot.tac' from '%s':" % basedir
-                print e
+                # the exception is already printed in base.py
+                print("Unable to load 'buildbot.tac' from '%s':" % basedir)
             return 1
     else:
         basedir = os.getcwd()

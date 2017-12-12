@@ -13,32 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-# this class is known to contain cruft and will be looked at later, so
-# no current implementation utilizes it aside from scripts.runner.
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import string_types
 
-from buildbot import pbutil
-from twisted.application import service
 from twisted.internet import defer
 from twisted.python import log
 
+from buildbot import pbutil
+from buildbot.util import service
 
-class UsersBase(service.MultiService):
-
-    """
-    Base class for services that manage users manually. This takes care
-    of the service.MultiService work needed by all the services that
-    subclass it.
-    """
-
-    def __init__(self):
-        service.MultiService.__init__(self)
-        self.master = None
-
-    def startService(self):
-        service.MultiService.startService(self)
-
-    def stopService(self):
-        return service.MultiService.stopService(self)
+# this class is known to contain cruft and will be looked at later, so
+# no current implementation utilizes it aside from scripts.runner.
 
 
 class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
@@ -71,7 +57,7 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
             # list, alternating ident, uid
             formatted_results += "user(s) added:\n"
             for user in results:
-                if isinstance(user, basestring):
+                if isinstance(user, string_types):
                     formatted_results += "identifier: %s\n" % user
                 else:
                     formatted_results += "uid: %d\n\n" % user
@@ -92,7 +78,7 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
             formatted_results += "user(s) found:\n"
             for user in results:
                 if user:
-                    for key in user:
+                    for key in sorted(user.keys()):
                         if key != 'bb_password':
                             formatted_results += "%s: %s\n" % (key, user[key])
                     formatted_results += "\n"
@@ -129,6 +115,7 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
         log.msg("perspective_commandline called")
         results = []
 
+        # pylint: disable=too-many-nested-blocks
         if ids:
             for user in ids:
                 # get identifier, guaranteed to be in user from checks
@@ -204,7 +191,7 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
         defer.returnValue(results)
 
 
-class CommandlineUserManager(UsersBase):
+class CommandlineUserManager(service.AsyncMultiService):
 
     """
     Service that runs to set up and register CommandlineUserManagerPerspective
@@ -212,7 +199,7 @@ class CommandlineUserManager(UsersBase):
     """
 
     def __init__(self, username=None, passwd=None, port=None):
-        UsersBase.__init__(self)
+        service.AsyncMultiService.__init__(self)
         assert username and passwd, ("A username and password pair must be given "
                                      "to connect and use `buildbot user`")
         self.username = username
@@ -223,21 +210,20 @@ class CommandlineUserManager(UsersBase):
         self.registration = None
 
     def startService(self):
-        UsersBase.startService(self)
         # set up factory and register with buildbot.pbmanager
-
         def factory(mind, username):
             return CommandlineUserManagerPerspective(self.master)
         self.registration = self.master.pbmanager.register(self.port,
                                                            self.username,
                                                            self.passwd,
                                                            factory)
+        return service.AsyncMultiService.startService(self)
 
     def stopService(self):
-        d = defer.maybeDeferred(UsersBase.stopService, self)
+        d = defer.maybeDeferred(service.AsyncMultiService.stopService, self)
 
+        @d.addCallback
         def unreg(_):
             if self.registration:
                 return self.registration.unregister()
-        d.addCallback(unreg)
         return d

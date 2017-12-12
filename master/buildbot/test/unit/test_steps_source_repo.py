@@ -13,16 +13,22 @@
 #
 # Copyright Buildbot Team Members
 
-from .test_changes_gerritchangesource import TestGerritChangeSource
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+
+from twisted.trial import unittest
+
 from buildbot.changes.changes import Change
 from buildbot.process.properties import Properties
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
 from buildbot.steps.source import repo
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import sourcesteps
-from twisted.trial import unittest
+
+from .test_changes_gerritchangesource import TestGerritChangeSource
 
 
 class RepoURL(unittest.TestCase):
@@ -31,8 +37,8 @@ class RepoURL(unittest.TestCase):
     def oneTest(self, props, expected):
         p = Properties()
         p.update(props, "test")
-        r = repo.RepoDownloadsFromProperties(props.keys())
-        self.assertEqual(r.getRenderingFor(p), expected)
+        r = repo.RepoDownloadsFromProperties(list(props))
+        self.assertEqual(sorted(r.getRenderingFor(p)), sorted(expected))
 
     def test_parse1(self):
         self.oneTest(
@@ -86,17 +92,9 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                       **kwargs))
         self.build.allChanges = lambda x=None: []
 
-    def myRunStep(self, result=SUCCESS, status_text=["update"]):
-        self.expectOutcome(result=result, status_text=status_text)
-        d = self.runStep()
-
-        def printlogs(res):
-            text = self.step.stdio_log.getTextWithHeaders()
-            if "Failure instance" in text and not self.shouldRetry:
-                print text
-            return res
-        d.addBoth(printlogs)
-        return d
+    def myRunStep(self, result=SUCCESS, state_string=None):
+        self.expectOutcome(result=result, state_string=state_string)
+        return self.runStep()
 
     def expectClobber(self):
         # stat return 1 so we clobber
@@ -105,7 +103,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=self.logEnviron))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=self.logEnviron, timeout=1200))
+                                 logEnviron=self.logEnviron))
             + 0,
             Expect('mkdir', dict(dir='wkdir',
                                  logEnviron=self.logEnviron))
@@ -121,7 +119,11 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         )
 
     def expectRepoSync(self, which_fail=-1, breakatfail=False, depth=0,
-                       syncoptions=["-c"], override_commands=[]):
+                       syncoptions=None, override_commands=None):
+        if syncoptions is None:
+            syncoptions = ["-c"]
+        if override_commands is None:
+            override_commands = []
         commands = [
             self.ExpectShell(
                 command=[
@@ -134,7 +136,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             self.ExpectShell(
                 command=['repo', 'manifest', '-r', '-o', 'manifest-original.xml'])
         ]
-        for i in xrange(len(commands)):
+        for i in range(len(commands)):
             self.expectCommands(commands[i] + (which_fail == i and 1 or 0))
             if which_fail == i and breakatfail:
                 break
@@ -144,35 +146,35 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.mySetupStep(repoDownloads=None)
         self.expectClobber()
         self.expectRepoSync()
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_basic_depth(self):
         """basic first time repo sync"""
         self.mySetupStep(repoDownloads=None, depth=2)
         self.expectClobber()
         self.expectRepoSync(depth=2)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update(self):
         """basic second time repo sync"""
         self.mySetupStep()
         self.expectnoClobber()
         self.expectRepoSync()
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_jobs(self):
         """basic first time repo sync with jobs"""
         self.mySetupStep(jobs=2)
         self.expectClobber()
         self.expectRepoSync(syncoptions=["-j2", "-c"])
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_sync_all_branches(self):
         """basic first time repo sync with all branches"""
         self.mySetupStep(syncAllBranches=True)
         self.expectClobber()
         self.expectRepoSync(syncoptions=[])
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_manifest_override(self):
         """repo sync with manifest_override_url property set
@@ -195,7 +197,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         ]
         self.expectRepoSync(which_fail=2, syncoptions=[],
                             override_commands=override_commands)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_manifest_override_local(self):
         """repo sync with manifest_override_url property set
@@ -217,7 +219,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         ]
         self.expectRepoSync(
             syncoptions=[], override_commands=override_commands)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_tarball(self):
         """repo sync using the tarball cache
@@ -234,7 +236,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                             + Expect.log(
                                 'stdio', stdout=str(10000 + 7 * 24 * 3600))
                             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_create_tarball(self):
         """repo sync create the tarball if its not here
@@ -246,7 +248,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                 command=['tar', '-z', '-xvf', '/tarball.tgz']) + 1,
             self.ExpectShell(command=['rm', '-f', '/tarball.tgz']) + 1,
             Expect('rmdir', dict(dir='wkdir/.repo',
-                                 logEnviron=False, timeout=1200))
+                                 logEnviron=False))
             + 1)
         self.expectRepoSync()
         self.expectCommands(self.ExpectShell(command=['stat', '-c%Y', '/tarball.tgz'])
@@ -255,7 +257,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                             self.ExpectShell(command=['tar', '-z',
                                                       '-cvf', '/tarball.tgz', '.repo'])
                             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def do_test_update_tarball(self, suffix, option):
         """repo sync update the tarball cache at the end (tarball older than a week)
@@ -275,7 +277,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                             self.ExpectShell(command=['tar'] + option +
                                              ['-cvf', '/tarball.' + suffix, '.repo'])
                             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_tarball(self):
         self.do_test_update_tarball("tar", [])
@@ -296,9 +298,11 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
     def test_update_tarball_lzop(self):
         self.do_test_update_tarball("tar.lzop", ["--lzop"])
 
-    def test_update_tarball_fail1(self, suffix="tar", option=[]):
+    def test_update_tarball_fail1(self, suffix="tar", option=None):
         """tarball extract fail -> remove the tarball + remove .repo dir
         """
+        if option is None:
+            option = []
         self.mySetupStep(tarball="/tarball." + suffix)
         self.expectClobber()
         self.expectCommands(
@@ -309,7 +313,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                 command=['rm', '-f', '/tarball.tar']) + 0,
             Expect(
                 'rmdir', dict(dir='wkdir/.repo',
-                              logEnviron=False, timeout=1200))
+                              logEnviron=False))
             + 0)
         self.expectRepoSync()
         self.expectCommands(self.ExpectShell(command=['stat', '-c%Y', '/tarball.' + suffix])
@@ -322,11 +326,13 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                             self.ExpectShell(command=['tar'] + option +
                                              ['-cvf', '/tarball.' + suffix, '.repo'])
                             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
-    def test_update_tarball_fail2(self, suffix="tar", option=[]):
+    def test_update_tarball_fail2(self, suffix="tar", option=None):
         """tarball update fail -> remove the tarball + continue repo download
         """
+        if option is None:
+            option = []
         self.mySetupStep(tarball="/tarball." + suffix)
         self.build.setProperty("repo_download",
                                "repo download test/bla 564/12", "test")
@@ -349,7 +355,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                             self.ExpectShell(
                                 command=['repo', 'download', 'test/bla', '564/12'])
                             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_downloads(self):
         """basic repo download, and check that repo_downloaded is updated"""
@@ -367,7 +373,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             + Expect.log('stdio', stderr="HEAD is now at 0123456789abcdef...\n"))
         self.expectProperty(
             "repo_downloaded", "564/12 0123456789abcdef ", "Source")
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_downloads2(self):
         """2 repo downloads"""
@@ -385,7 +391,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             self.ExpectShell(
                 command=['repo', 'download', 'test/bla2', '565/12'])
             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_download_manifest(self):
         """2 repo downloads, with one manifest patch"""
@@ -422,12 +428,13 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             self.ExpectShell(
                 command=['repo', 'download', 'test/bla', '564/12'])
             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_downloads_mirror_sync(self):
         """repo downloads, with mirror synchronization issues"""
         self.mySetupStep()
-        self.step.mirror_sync_sleep = 0.001  # we dont really want the test to wait...
+        # we don't really want the test to wait...
+        self.step.mirror_sync_sleep = 0.001
         self.build.setProperty("repo_download",
                                "repo download test/bla 564/12", "test")
         self.expectnoClobber()
@@ -446,12 +453,13 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             self.ExpectShell(
                 command=['repo', 'download', 'test/bla', '564/12'])
             + 0)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_downloads_change_missing(self):
         """repo downloads, with no actual mirror synchronization issues (still retries 2 times)"""
         self.mySetupStep()
-        self.step.mirror_sync_sleep = 0.001  # we dont really want the test to wait...
+        # we don't really want the test to wait...
+        self.step.mirror_sync_sleep = 0.001
         self.step.mirror_sync_retry = 1  # on retry once
         self.build.setProperty("repo_download",
                                "repo download test/bla 564/12", "test")
@@ -469,7 +477,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             Expect.log(
                 "stdio", stderr="fatal: Couldn't find remote ref \n"),
         )
-        return self.myRunStep(result=FAILURE, status_text=["repo: change test/bla 564/12 does not exist"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="repo: change test/bla 564/12 does not exist (failure)")
 
     def test_repo_downloads_fail1(self):
         """repo downloads, cherry-pick returns 1"""
@@ -486,7 +495,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                 command=['repo', 'forall', '-c', 'git', 'diff', 'HEAD'])
             + 0
         )
-        return self.myRunStep(result=FAILURE, status_text=["download failed: test/bla 564/12"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="download failed: test/bla 564/12 (failure)")
 
     def test_repo_downloads_fail2(self):
         """repo downloads, cherry-pick returns 0 but error in stderr"""
@@ -504,7 +514,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
                 command=['repo', 'forall', '-c', 'git', 'diff', 'HEAD'])
             + 0
         )
-        return self.myRunStep(result=FAILURE, status_text=["download failed: test/bla 564/12"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="download failed: test/bla 564/12 (failure)")
 
     def test_repo_downloads_from_change_source(self):
         """basic repo download from change source, and check that repo_downloaded is updated"""
@@ -522,11 +533,12 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             + Expect.log('stdio', stderr="HEAD is now at 0123456789abcdef...\n"))
         self.expectProperty(
             "repo_downloaded", "564/12 0123456789abcdef ", "Source")
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_repo_downloads_from_change_source_codebase(self):
         """basic repo download from change source, and check that repo_downloaded is updated"""
-        self.mySetupStep(repoDownloads=repo.RepoDownloadsFromChangeSource("mycodebase"))
+        self.mySetupStep(
+            repoDownloads=repo.RepoDownloadsFromChangeSource("mycodebase"))
         chdict = TestGerritChangeSource.expected_change
         change = Change(None, None, None, properties=chdict['properties'])
         # getSourceStamp is faked by SourceStepMixin
@@ -542,14 +554,14 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
             + Expect.log('stdio', stderr="HEAD is now at 0123456789abcdef...\n"))
         self.expectProperty(
             "repo_downloaded", "564/12 0123456789abcdef ", "Source")
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_fail1(self):
         """ fail at cleanup: ignored"""
         self.mySetupStep()
         self.expectnoClobber()
         self.expectRepoSync(which_fail=0, breakatfail=False)
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_fail2(self):
         """fail at repo init: clobber"""
@@ -559,7 +571,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync()
         self.shouldRetry = True
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_fail3(self):
         """ fail at repo sync: clobber"""
@@ -569,7 +581,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync()
         self.shouldRetry = True
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_fail4(self):
         """fail at repo manifest: clobber"""
@@ -579,7 +591,7 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync()
         self.shouldRetry = True
-        return self.myRunStep(status_text=["update"])
+        return self.myRunStep()
 
     def test_update_doublefail(self):
         """fail at repo manifest: clobber but still fail"""
@@ -589,7 +601,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync(which_fail=3, breakatfail=True)
         self.shouldRetry = True
-        return self.myRunStep(result=FAILURE, status_text=["repo failed at: repo manifest"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="repo failed at: repo manifest (failure)")
 
     def test_update_doublefail2(self):
         """fail at repo sync: clobber but still fail"""
@@ -599,7 +612,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync(which_fail=2, breakatfail=True)
         self.shouldRetry = True
-        return self.myRunStep(result=FAILURE, status_text=["repo failed at: repo sync"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="repo failed at: repo sync (failure)")
 
     def test_update_doublefail3(self):
         """fail at repo init: clobber but still fail"""
@@ -609,7 +623,8 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync(which_fail=1, breakatfail=True)
         self.shouldRetry = True
-        return self.myRunStep(result=FAILURE, status_text=["repo failed at: repo init"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="repo failed at: repo init (failure)")
 
     def test_basic_fail(self):
         """fail at repo init: no need to re-clobber but still fail"""
@@ -617,4 +632,5 @@ class TestRepo(sourcesteps.SourceStepMixin, unittest.TestCase):
         self.expectClobber()
         self.expectRepoSync(which_fail=1, breakatfail=True)
         self.shouldRetry = True
-        return self.myRunStep(result=FAILURE, status_text=["repo failed at: repo init"])
+        return self.myRunStep(result=FAILURE,
+                              state_string="repo failed at: repo init (failure)")

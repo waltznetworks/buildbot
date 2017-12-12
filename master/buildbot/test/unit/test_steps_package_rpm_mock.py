@@ -13,13 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.trial import unittest
+
 from buildbot import config
-from buildbot.status.results import SUCCESS
+from buildbot.process.properties import Interpolate
+from buildbot.process.results import SUCCESS
 from buildbot.steps.package.rpm import mock
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import steps
-from twisted.trial import unittest
 
 
 class TestMock(steps.BuildStepMixin, unittest.TestCase):
@@ -44,13 +49,13 @@ class TestMock(steps.BuildStepMixin, unittest.TestCase):
             Expect('rmdir', {'dir': ['build/build.log', 'build/root.log',
                                      'build/state.log']})
             + 0,
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command=['mock', '--root', 'TESTROOT'],
                         logfiles={'build.log': 'build.log',
                                   'root.log': 'root.log',
                                   'state.log': 'state.log'})
             + 0)
-        self.expectOutcome(result=SUCCESS, status_text=["'mock", '--root', "...'"])
+        self.expectOutcome(result=SUCCESS, state_string="'mock --root ...'")
         return self.runStep()
 
     def test_resultdir_success(self):
@@ -60,14 +65,33 @@ class TestMock(steps.BuildStepMixin, unittest.TestCase):
                                      'build/RESULT/root.log',
                                      'build/RESULT/state.log']})
             + 0,
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command=['mock', '--root', 'TESTROOT',
                                  '--resultdir', 'RESULT'],
                         logfiles={'build.log': 'RESULT/build.log',
                                   'root.log': 'RESULT/root.log',
                                   'state.log': 'RESULT/state.log'})
             + 0)
-        self.expectOutcome(result=SUCCESS, status_text=["'mock", '--root', "...'"])
+        self.expectOutcome(result=SUCCESS)
+        return self.runStep()
+
+    def test_resultdir_renderable(self):
+        resultdir_text = "RESULT"
+        self.setupStep(mock.Mock(root='TESTROOT', resultdir=Interpolate(
+            '%(kw:resultdir)s', resultdir=resultdir_text)))
+        self.expectCommands(
+            Expect('rmdir', {'dir': ['build/RESULT/build.log',
+                                     'build/RESULT/root.log',
+                                     'build/RESULT/state.log']})
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['mock', '--root', 'TESTROOT',
+                                 '--resultdir', 'RESULT'],
+                        logfiles={'build.log': 'RESULT/build.log',
+                                  'root.log': 'RESULT/root.log',
+                                  'state.log': 'RESULT/state.log'})
+            + 0)
+        self.expectOutcome(result=SUCCESS, state_string="'mock --root ...'")
         return self.runStep()
 
 
@@ -89,7 +113,7 @@ class TestMockBuildSRPM(steps.BuildStepMixin, unittest.TestCase):
             Expect('rmdir', {'dir': ['build/build.log', 'build/root.log',
                                      'build/state.log']})
             + 0,
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command=['mock', '--root', 'TESTROOT',
                                  '--buildsrpm', '--spec', 'foo.spec',
                                  '--sources', '.'],
@@ -97,7 +121,7 @@ class TestMockBuildSRPM(steps.BuildStepMixin, unittest.TestCase):
                                   'root.log': 'root.log',
                                   'state.log': 'state.log'},)
             + 0)
-        self.expectOutcome(result=SUCCESS, status_text=['mock buildsrpm'])
+        self.expectOutcome(result=SUCCESS, state_string='mock buildsrpm')
         return self.runStep()
 
 
@@ -119,12 +143,12 @@ class TestMockRebuild(steps.BuildStepMixin, unittest.TestCase):
             Expect('rmdir', {'dir': ['build/build.log', 'build/root.log',
                                      'build/state.log']})
             + 0,
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command=['mock', '--root', 'TESTROOT',
                                  '--rebuild', 'foo.src.rpm'],
                         logfiles={'build.log': 'build.log',
                                   'root.log': 'root.log',
                                   'state.log': 'state.log'},)
             + 0)
-        self.expectOutcome(result=SUCCESS, status_text=['mock rebuild srpm'])
+        self.expectOutcome(result=SUCCESS, state_string='mock rebuild srpm')
         return self.runStep()

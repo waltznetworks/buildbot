@@ -13,6 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import text_type
+
+import hashlib
+import itertools
+
+import sqlalchemy as sa
+
+from buildbot.util import unicode2bytes
+
 
 class DBConnectorComponent(object):
     # A fixed component of the DBConnector, handling one particular aspect of
@@ -22,6 +33,7 @@ class DBConnectorComponent(object):
     # of the necessary backlinks and other housekeeping.
 
     connector = None
+    data2db = {}
 
     def __init__(self, connector):
         self.db = connector
@@ -32,21 +44,20 @@ class DBConnectorComponent(object):
             if isinstance(o, CachedMethod):
                 setattr(self, method, o.get_cached_method(self))
 
-    _is_check_length_necessary = None
+    @property
+    def master(self):
+        return self.db.master
 
-    def check_length(self, col, value):
-        # for use by subclasses to check that 'value' will fit in 'col', where
-        # 'col' is a table column from the model.
+    _isCheckLengthNecessary = None
 
-        # ignore this check for database engines that either provide this error
-        # themselves (postgres) or that do not enforce maximum-length
-        # restrictions (sqlite)
-        if not self._is_check_length_necessary:
+    def checkLength(self, col, value):
+
+        if not self._isCheckLengthNecessary:
             if self.db.pool.engine.dialect.name == 'mysql':
-                self._is_check_length_necessary = True
+                self._isCheckLengthNecessary = True
             else:
                 # not necessary, so just stub out the method
-                self.check_length = lambda col, value: None
+                self.checkLength = lambda col, value: None
                 return
 
         assert col.type.length, "column %s does not have a length" % (col,)
@@ -54,6 +65,60 @@ class DBConnectorComponent(object):
             raise RuntimeError(
                 "value for column %s is greater than max of %d characters: %s"
                 % (col, col.type.length, value))
+
+    def ensureLength(self, col, value):
+        assert col.type.length, "column %s does not have a length" % (col,)
+        if value and len(value) > col.type.length:
+            value = value[:col.type.length // 2] + hashlib.sha1(unicode2bytes(value)).hexdigest()[:col.type.length // 2]
+        return value
+
+    def findSomethingId(self, tbl, whereclause, insert_values,
+                        _race_hook=None, autoCreate=True):
+        def thd(conn, no_recurse=False):
+            # try to find the master
+            q = sa.select([tbl.c.id],
+                          whereclause=whereclause)
+            r = conn.execute(q)
+            row = r.fetchone()
+            r.close()
+
+            # found it!
+            if row:
+                return row.id
+
+            if not autoCreate:
+                return None
+
+            _race_hook and _race_hook(conn)
+
+            try:
+                r = conn.execute(tbl.insert(), [insert_values])
+                return r.inserted_primary_key[0]
+            except (sa.exc.IntegrityError, sa.exc.ProgrammingError):
+                # try it all over again, in case there was an overlapping,
+                # identical call, but only retry once.
+                if no_recurse:
+                    raise
+                return thd(conn, no_recurse=True)
+        return self.db.pool.do(thd)
+
+    def hashColumns(self, *args):
+        def encode(x):
+            if x is None:
+                return b'\xf5'
+            elif isinstance(x, text_type):
+                return x.encode('utf-8')
+            return str(x).encode('utf-8')
+
+        return hashlib.sha1(b'\0'.join(map(encode, args))).hexdigest()
+
+    def doBatch(self, batch, batch_n=500):
+        iterator = iter(batch)
+        while True:
+            batch = list(itertools.islice(iterator, batch_n))
+            if not batch:
+                break
+            yield batch
 
 
 class CachedMethod(object):

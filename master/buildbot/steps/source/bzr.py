@@ -13,14 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import os
 
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.python import log
 
-from buildbot.interfaces import BuildSlaveTooOldError
+from buildbot.interfaces import WorkerTooOldError
 from buildbot.process import buildstep
+from buildbot.process import remotecommand
 from buildbot.steps.source.base import Source
 
 
@@ -49,7 +53,9 @@ class Bzr(Source):
         if baseURL is not None and defaultBranch is None:
             raise ValueError("you must provide defaultBranch with baseURL")
 
-        assert self.mode in ['incremental', 'full']
+        if not self._hasAttrGroupMember('mode', self.mode):
+            raise ValueError("mode %s is not one of %s" %
+                             (self.mode, self._listAttrGroupMembers('mode')))
 
         if self.mode == 'full':
             assert self.method in ['clean', 'fresh', 'clobber', 'copy', None]
@@ -66,25 +72,21 @@ class Bzr(Source):
 
         d = self.checkBzr()
 
+        @d.addCallback
         def checkInstall(bzrInstalled):
             if not bzrInstalled:
-                raise BuildSlaveTooOldError("bzr is not installed on slave")
+                raise WorkerTooOldError("bzr is not installed on worker")
             return 0
-        d.addCallback(checkInstall)
 
         d.addCallback(lambda _: self.sourcedirIsPatched())
 
+        @d.addCallback
         def checkPatched(patched):
             if patched:
                 return self._dovccmd(['clean-tree', '--ignored', '--force'])
-            else:
-                return 0
-        d.addCallback(checkPatched)
+            return 0
 
-        if self.mode == 'full':
-            d.addCallback(lambda _: self.full())
-        elif self.mode == 'incremental':
-            d.addCallback(lambda _: self.incremental())
+        d.addCallback(self._getAttrGroupMember('mode', self.mode))
 
         if patch:
             d.addCallback(self.patch, patch)
@@ -94,7 +96,7 @@ class Bzr(Source):
         return d
 
     @defer.inlineCallbacks
-    def incremental(self):
+    def mode_incremental(self, _):
         updatable = yield self._sourcedirIsUpdatable()
         if updatable:
             command = ['update']
@@ -105,7 +107,7 @@ class Bzr(Source):
             yield self._doFull()
 
     @defer.inlineCallbacks
-    def full(self):
+    def mode_full(self, _):
         if self.method == 'clobber':
             yield self.clobber()
             return
@@ -125,24 +127,40 @@ class Bzr(Source):
         else:
             raise ValueError("Unknown method, check your configuration")
 
+    def _clobber(self):
+        cmd = remotecommand.RemoteCommand('rmdir', {'dir': self.workdir,
+                                                    'logEnviron': self.logEnviron, })
+        cmd.useLog(self.stdio_log, False)
+        d = self.runCommand(cmd)
+
+        @d.addCallback
+        def checkRemoval(res):
+            if cmd.rc != 0:
+                raise RuntimeError("Failed to delete directory")
+            return cmd.rc
+        return d
+
     def clobber(self):
-        d = self.runRmdir(self.workdir)
+        d = self._clobber()
         d.addCallback(lambda _: self._doFull())
         return d
 
     def copy(self):
-        d = self.runRmdir('build', abandonOnFailure=False)
-        d.addCallback(lambda _: self.incremental())
+        cmd = remotecommand.RemoteCommand('rmdir', {'dir': 'build',
+                                                    'logEnviron': self.logEnviron, })
+        cmd.useLog(self.stdio_log, False)
+        d = self.runCommand(cmd)
+        d.addCallback(self.mode_incremental)
 
+        @d.addCallback
         def copy(_):
-            cmd = buildstep.RemoteCommand('cpdir',
-                                          {'fromdir': 'source',
-                                           'todir': 'build',
-                                           'logEnviron': self.logEnviron, })
+            cmd = remotecommand.RemoteCommand('cpdir',
+                                              {'fromdir': 'source',
+                                               'todir': 'build',
+                                               'logEnviron': self.logEnviron, })
             cmd.useLog(self.stdio_log, False)
             d = self.runCommand(cmd)
             return d
-        d.addCallback(copy)
         return d
 
     def clean(self):
@@ -181,7 +199,8 @@ class Bzr(Source):
                         % (repeats, delay))
                 self.retry = (delay, repeats - 1)
                 df = defer.Deferred()
-                df.addCallback(lambda _: self.clobber())
+                df.addCallback(lambda _: self._clobber())
+                df.addCallback(lambda _: self._doFull())
                 reactor.callLater(delay, df.callback, None)
                 return df
             return res
@@ -193,12 +212,12 @@ class Bzr(Source):
     def finish(self, res):
         d = defer.succeed(res)
 
+        @d.addCallback
         def _gotResults(results):
             self.setStatus(self.cmd, results)
             log.msg("Closing log, sending result of the command %s " %
                     (self.cmd))
             return results
-        d.addCallback(_gotResults)
         d.addCallback(self.finished)
         return d
 
@@ -212,33 +231,30 @@ class Bzr(Source):
         return lastChange
 
     def _dovccmd(self, command, abandonOnFailure=True, collectStdout=False):
-        cmd = buildstep.RemoteShellCommand(self.workdir, ['bzr'] + command,
-                                           env=self.env,
-                                           logEnviron=self.logEnviron,
-                                           timeout=self.timeout,
-                                           collectStdout=collectStdout)
+        cmd = remotecommand.RemoteShellCommand(self.workdir, ['bzr'] + command,
+                                               env=self.env,
+                                               logEnviron=self.logEnviron,
+                                               timeout=self.timeout,
+                                               collectStdout=collectStdout)
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
 
-        def evaluateCommand(cmd):
+        @d.addCallback
+        def evaluateCommand(_):
             if abandonOnFailure and cmd.didFail():
                 log.msg("Source step failed while running command %s" % cmd)
                 raise buildstep.BuildStepFailed()
             if collectStdout:
                 return cmd.stdout
-            else:
-                return cmd.rc
-        d.addCallback(lambda _: evaluateCommand(cmd))
+            return cmd.rc
         return d
 
     def checkBzr(self):
         d = self._dovccmd(['--version'])
 
+        @d.addCallback
         def check(res):
-            if res == 0:
-                return True
-            return False
-        d.addCallback(check)
+            return res == 0
         return d
 
     def _getMethod(self):
@@ -253,6 +269,7 @@ class Bzr(Source):
         d = self._dovccmd(["version-info", "--custom", "--template='{revno}"],
                           collectStdout=True)
 
+        @d.addCallback
         def setrev(stdout):
             revision = stdout.strip("'")
             try:
@@ -264,5 +281,4 @@ class Bzr(Source):
             log.msg("Got Git revision %s" % (revision, ))
             self.updateSourceProperty('got_revision', revision)
             return 0
-        d.addCallback(setrev)
         return d

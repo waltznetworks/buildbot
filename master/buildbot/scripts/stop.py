@@ -13,19 +13,26 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 import errno
 import os
 import signal
 import time
 
+from twisted.python.runtime import platformType
+
 from buildbot.scripts import base
 
 
-def stop(config, signame="TERM", wait=False):
+def stop(config, signame="TERM", wait=None):
     basedir = config['basedir']
     quiet = config['quiet']
+
+    if wait is None:
+        wait = not config['no-wait']
 
     if config['clean']:
         signame = 'USR1'
@@ -37,29 +44,29 @@ def stop(config, signame="TERM", wait=False):
     try:
         with open(pidfile, "rt") as f:
             pid = int(f.read().strip())
-    except:
+    except Exception:
         if not config['quiet']:
-            print "buildmaster not running"
+            print("buildmaster not running")
         return 0
 
     signum = getattr(signal, "SIG" + signame)
     try:
         os.kill(pid, signum)
-    except OSError, e:
-        if e.errno != errno.ESRCH:
+    except OSError as e:
+        if e.errno != errno.ESRCH and platformType != "win32":
             raise
         else:
             if not config['quiet']:
-                print "buildmaster not running"
+                print("buildmaster not running")
             try:
                 os.unlink(pidfile)
-            except:
+            except OSError:
                 pass
             return 0
 
     if not wait:
         if not quiet:
-            print "sent SIG%s to process" % signame
+            print("sent SIG%s to process" % signame)
         return 0
 
     time.sleep(0.1)
@@ -72,10 +79,10 @@ def stop(config, signame="TERM", wait=False):
             os.kill(pid, 0)
         except OSError:
             if not quiet:
-                print "buildbot process %d is dead" % pid
+                print("buildbot process %d is dead" % pid)
             return 0
         time.sleep(1)
         count += 1
     if not quiet:
-        print "never saw process go away"
+        print("never saw process go away")
     return 1

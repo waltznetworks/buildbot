@@ -13,72 +13,23 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 import os
 import sys
 import traceback
 
-from buildbot import config as config_module
+from twisted.internet import defer
+from twisted.python import util
+
 from buildbot import monkeypatches
 from buildbot.db import connector
 from buildbot.master import BuildMaster
 from buildbot.scripts import base
 from buildbot.util import in_reactor
-from twisted.internet import defer
-from twisted.python import runtime
-from twisted.python import util
-
-
-def checkBasedir(config):
-    if not config['quiet']:
-        print "checking basedir"
-
-    if not base.isBuildmasterDir(config['basedir']):
-        return False
-
-    if runtime.platformType != 'win32':  # no pids on win32
-        if not config['quiet']:
-            print "checking for running master"
-        pidfile = os.path.join(config['basedir'], 'twistd.pid')
-        if os.path.exists(pidfile):
-            print "'%s' exists - is this master still running?" % (pidfile,)
-            return False
-
-    tac = base.getConfigFromTac(config['basedir'])
-    if tac:
-        if isinstance(tac.get('rotateLength', 0), str):
-            print "ERROR: rotateLength is a string, it should be a number"
-            print "ERROR: Please, edit your buildbot.tac file and run again"
-            print "ERROR: See http://trac.buildbot.net/ticket/2588 for more details"
-            return False
-        if isinstance(tac.get('maxRotatedFiles', 0), str):
-            print "ERROR: maxRotatedFiles is a string, it should be a number"
-            print "ERROR: Please, edit your buildbot.tac file and run again"
-            print "ERROR: See http://trac.buildbot.net/ticket/2588 for more details"
-            return False
-
-    return True
-
-
-def loadConfig(config, configFileName='master.cfg'):
-    if not config['quiet']:
-        print "checking %s" % configFileName
-
-    try:
-        master_cfg = config_module.MasterConfig.loadConfig(
-            config['basedir'], configFileName)
-    except config_module.ConfigErrors, e:
-        print "Errors loading configuration:"
-        for msg in e.errors:
-            print "  " + msg
-        return
-    except:
-        print "Errors loading configuration:"
-        traceback.print_exc(file=sys.stdout)
-        return
-
-    return master_cfg
+from buildbot.util import stripUrlPassword
 
 
 def installFile(config, target, source, overwrite=False):
@@ -90,112 +41,90 @@ def installFile(config, target, source, overwrite=False):
         if old_contents != new_contents:
             if overwrite:
                 if not config['quiet']:
-                    print "%s has old/modified contents" % target
-                    print " overwriting it with new contents"
+                    print("%s has old/modified contents" % target)
+                    print(" overwriting it with new contents")
                 with open(target, "wt") as f:
                     f.write(new_contents)
             else:
                 if not config['quiet']:
-                    print "%s has old/modified contents" % target
-                    print " writing new contents to %s.new" % target
+                    print("%s has old/modified contents" % target)
+                    print(" writing new contents to %s.new" % target)
                 with open(target + ".new", "wt") as f:
                     f.write(new_contents)
         # otherwise, it's up to date
     else:
         if not config['quiet']:
-            print "creating %s" % target
+            print("creating %s" % target)
         with open(target, "wt") as f:
             f.write(new_contents)
 
 
 def upgradeFiles(config):
     if not config['quiet']:
-        print "upgrading basedir"
+        print("upgrading basedir")
 
     webdir = os.path.join(config['basedir'], "public_html")
-    if not os.path.exists(webdir):
-        if not config['quiet']:
-            print "creating public_html"
-        os.mkdir(webdir)
-
-    templdir = os.path.join(config['basedir'], "templates")
-    if not os.path.exists(templdir):
-        if not config['quiet']:
-            print "creating templates"
-        os.mkdir(templdir)
-
-    for file in ('bg_gradient.jpg', 'default.css',
-                 'robots.txt', 'favicon.ico'):
-        source = util.sibpath(__file__, "../status/web/files/%s" % (file,))
-        target = os.path.join(webdir, file)
-        try:
-            installFile(config, target, source)
-        except IOError:
-            print "Can't write '%s'." % (target,)
+    if os.path.exists(webdir):
+        print("Notice: public_html is not used starting from Buildbot 0.9.0")
+        print("        consider using third party HTTP server for serving "
+              "static files")
 
     installFile(config, os.path.join(config['basedir'], "master.cfg.sample"),
                 util.sibpath(__file__, "sample.cfg"), overwrite=True)
-
-    # if index.html exists, use it to override the root page tempalte
-    index_html = os.path.join(webdir, "index.html")
-    root_html = os.path.join(templdir, "root.html")
-    if os.path.exists(index_html):
-        if os.path.exists(root_html):
-            print "Notice: %s now overrides %s" % (root_html, index_html)
-            print "        as the latter is not used by buildbot anymore."
-            print "        Decide which one you want to keep."
-        else:
-            try:
-                print "Notice: Moving %s to %s." % (index_html, root_html)
-                print "        You can (and probably want to) remove it if " \
-                    "you haven't modified this file."
-                os.renames(index_html, root_html)
-            except Exception, e:
-                print "Error moving %s to %s: %s" % (index_html, root_html,
-                                                     str(e))
 
 
 @defer.inlineCallbacks
 def upgradeDatabase(config, master_cfg):
     if not config['quiet']:
-        print "upgrading database (%s)" % (master_cfg.db['db_url'])
+        print("upgrading database (%s)"
+              % (stripUrlPassword(master_cfg.db['db_url'])))
 
     master = BuildMaster(config['basedir'])
     master.config = master_cfg
-    db = connector.DBConnector(master, basedir=config['basedir'])
-
+    master.db.disownServiceParent()
+    db = connector.DBConnector(basedir=config['basedir'])
+    db.setServiceParent(master)
     yield db.setup(check_version=False, verbose=not config['quiet'])
     yield db.model.upgrade()
+    yield db.masters.setAllMastersActiveLongTimeAgo()
 
 
 @in_reactor
-@defer.inlineCallbacks
 def upgradeMaster(config, _noMonkey=False):
     if not _noMonkey:  # pragma: no cover
         monkeypatches.patch_all()
 
-    if not checkBasedir(config):
-        defer.returnValue(1)
-        return
+    if not base.checkBasedir(config):
+        return defer.succeed(1)
 
     os.chdir(config['basedir'])
 
     try:
         configFile = base.getConfigFileFromTac(config['basedir'])
-    except (SyntaxError, ImportError), e:
-        print "Unable to load 'buildbot.tac' from '%s':" % config['basedir']
-        print e
-        defer.returnValue(1)
-        return
-    master_cfg = loadConfig(config, configFile)
+    except (SyntaxError, ImportError):
+        print("Unable to load 'buildbot.tac' from '%s':" %
+              config['basedir'], file=sys.stderr)
+        e = traceback.format_exc()
+        print(e, file=sys.stderr)
+        return defer.succeed(1)
+    master_cfg = base.loadConfig(config, configFile)
     if not master_cfg:
+        return defer.succeed(1)
+    return _upgradeMaster(config, master_cfg)
+
+
+@defer.inlineCallbacks
+def _upgradeMaster(config, master_cfg):
+
+    try:
+        upgradeFiles(config)
+        yield upgradeDatabase(config, master_cfg)
+    except Exception:
+        e = traceback.format_exc()
+        print("problem while upgrading!:\n" + e, file=sys.stderr)
         defer.returnValue(1)
-        return
-
-    upgradeFiles(config)
-    yield upgradeDatabase(config, master_cfg)
-
-    if not config['quiet']:
-        print "upgrade complete"
+    else:
+        if not config['quiet']:
+            print("upgrade complete")
 
     defer.returnValue(0)

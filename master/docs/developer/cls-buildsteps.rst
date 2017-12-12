@@ -4,7 +4,10 @@ BuildSteps
 .. py:module:: buildbot.process.buildstep
 
 There are a few parent classes that are used as base classes for real buildsteps.
-This section describes the base classes.  The "leaf" classes are described in :doc:`../manual/cfg-buildsteps`.
+This section describes the base classes.
+The "leaf" classes are described in :doc:`../manual/cfg-buildsteps`.
+
+See :ref:`Writing-New-BuildSteps` for a guide to implementing new steps.
 
 BuildStep
 ---------
@@ -17,6 +20,12 @@ BuildStep
     .. py:attribute:: name
 
         The name of the step.
+        Note that this value may change when the step is started, if the existing name was not unique.
+
+    .. py:attribute:: stepid
+
+        The ID of this step in the database.
+        This attribute is not set until the step starts.
 
     .. py:attribute:: description
 
@@ -80,6 +89,22 @@ BuildStep
 
         If true, the step will run even if a previous step halts the build with ``haltOnFailure``.
 
+    .. py:attribute:: logEncoding
+
+        The log encoding to use for logs produced in this step, or None to ues the global default.
+        See :ref:`Log-Encodings`.
+
+    .. py:attribute:: rendered
+
+        At the beginning of the step, the renderable attributes are rendered against the properties.
+        There is a slight delay however when those are not yet rendered, which lead to weird and difficult to reproduce bugs.
+        To address this problem, a ``rendered`` attribute is available for methods that could be called early in the buildstep creation.
+
+    .. py:attribute:: results
+
+        This is the result (a code from :py:mod:`buildbot.process.results`) of the step.
+        This attribute only exists after the step is finished, and should only be used in :py:meth:`getResultSummary`.
+
     A few important pieces of information are not available when a step is constructed, and are added later.
     These are set by the following methods; the order in which these methods are called is not defined.
 
@@ -87,7 +112,7 @@ BuildStep
 
         :param build: the :class:`~buildbot.process.build.Build` instance controlling this step.
 
-        This method is called during setup to set the build instance controlling this slave.
+        This method is called during setup to set the build instance controlling this worker.
         Subclasses can override this to get access to the build object as soon as it is available.
         The default implementation sets the :attr:`build` attribute.
 
@@ -95,23 +120,36 @@ BuildStep
 
         The build object controlling this step.
 
-    .. py:method:: setBuildSlave(build)
+    .. py:method:: setWorker(build)
 
-        :param build: the :class:`~buildbot.buildslave.BuildSlave` instance on which this step will run.
+        :param build: the :class:`~buildbot.worker.Worker` instance on which this step will run.
 
-        Similarly, this method is called with the build slave that will run this step.
-        The default implementation sets the :attr:`buildslave` attribute.
+        Similarly, this method is called with the worker that will run this step.
+        The default implementation sets the :attr:`worker` attribute.
 
-    .. py:attribute:: buildslave
+    .. py:attribute:: worker
 
-        The build slave that will run this step.
+        The worker that will run this step.
+
+    .. py:attribute:: workdir
+
+        Implemented as a property.
+        Workdir where actions of the step are happening.
+        The workdir is by order of priority
+
+        * workdir of the step, if defined via constructor argument
+
+        * workdir of the BuildFactory (itself defaults to 'build').
+
+            BuildFactory workdir can be a function of sourcestamp. See :ref:`Factory-Workdir-Functions`
 
     .. py:method:: setDefaultWorkdir(workdir)
 
         :param workdir: the default workdir, from the build
 
-        This method is called at build startup with the default workdir for the build.
-        Steps which allow a workdir to be specified, but want to override it with the build's default workdir, can use this method to apply the default.
+        .. note::
+
+           This method is deprecated and should not be used anymore, as workdir is calculated automatically via a property
 
     .. py:method:: setupProgress()
 
@@ -119,19 +157,16 @@ BuildStep
         It is only called if the build has :attr:`useProgress` set.
         There is rarely any reason to override this method.
 
-    .. py:attribute:: progress
-
-        If the step is tracking progress, this is a :class:`~buildbot.status.progress.StepProgress` instance performing that task.
-
     Execution of the step itself is governed by the following methods and attributes.
 
     .. py:method:: startStep(remote)
 
-        :param remote: a remote reference to the slave-side
-            :class:`~buildslave.bot.SlaveBuilder` instance
+        :param remote: a remote reference to the worker-side
+            :class:`~buildbot_worker.pb.WorkerForBuilderPb` instance
         :returns: Deferred
 
-        Begin the step. This is the build's interface to step execution.
+        Begin the step.
+        This is the build's interface to step execution.
         Subclasses should override :meth:`run` to implement custom behaviors.
 
     .. py:method:: run()
@@ -140,7 +175,7 @@ BuildStep
 
         Execute the step.
         When this method returns (or when the Deferred it returns fires), the step is complete.
-        The method's return value must be an integer, giving the result of the step -- a constant from :mod:`buildbot.status.results`.
+        The method's return value must be an integer, giving the result of the step -- a constant from :mod:`buildbot.process.results`.
         If the method raises an exception or its Deferred fires with failure, then the step will be completed with an EXCEPTION result.
         Any other output from the step (logfiles, status strings, URLs, etc.) is the responsibility of the ``run`` method.
 
@@ -149,23 +184,23 @@ BuildStep
 
     .. py:method:: start()
 
-        :returns: ``None`` or :data:`~buildbot.status.results.SKIPPED`,
+        :returns: ``None`` or :data:`~buildbot.process.results.SKIPPED`,
             optionally via a Deferred.
 
         Begin the step.
         BuildSteps written before Buildbot-0.9.0 often override this method instead of :py:meth:`run`, but this approach is deprecated.
 
-        When the step is done, it should call :py:meth:`finished`, with a result -- a constant from :mod:`buildbot.status.results`.
+        When the step is done, it should call :py:meth:`finished`, with a result -- a constant from :mod:`buildbot.process.results`.
         The result will be handed off to the :py:class:`~buildbot.process.build.Build`.
 
         If the step encounters an exception, it should call :meth:`failed` with a Failure object.
 
-        If the step decides it does not need to be run, :meth:`start` can return the constant :data:`~buildbot.status.results.SKIPPED`.
+        If the step decides it does not need to be run, :meth:`start` can return the constant :data:`~buildbot.process.results.SKIPPED`.
         In this case, it is not necessary to call :meth:`finished` directly.
 
     .. py:method:: finished(results)
 
-        :param results: a constant from :mod:`~buildbot.status.results`
+        :param results: a constant from :mod:`~buildbot.process.results`
 
         A call to this method indicates that the step is finished and the build should analyze the results and perhaps proceed to the next step.
         The step should not perform any additional processing after calling this method.
@@ -190,13 +225,14 @@ BuildStep
         The step should be brought to a halt as quickly as possible, by cancelling a remote command, killing a local process, etc.
         The step must still finish with either :meth:`finished` or :meth:`failed`.
 
-        The ``reason`` parameter can be a string or, when a slave is lost during step processing, a :exc:`~twisted.internet.error.ConnectionLost` failure.
+        The ``reason`` parameter can be a string or, when a worker is lost during step processing, a :exc:`~twisted.internet.error.ConnectionLost` failure.
 
         The parent method handles any pending lock operations, and should be called by implementations in subclasses.
 
     .. py:attribute:: stopped
 
-        If false, then the step is running.  If true, the step is not running, or has been interrupted.
+        If false, then the step is running.
+        If true, the step is not running, or has been interrupted.
 
     A step can indicate its up-to-the-moment status using a short summary string.
     These methods allow step subclasses to produce such summaries.
@@ -212,7 +248,7 @@ BuildStep
         :returns: dictionary, optionally via Deferred
 
         Returns a dictionary containing status information for a running step.
-        The dictionary can a ``step`` key with a unicode value giving a summary for display with the step.
+        The dictionary can have a ``step`` key with a unicode value giving a summary for display with the step.
         This method is only called while the step is running.
 
         New-style build steps should override this method to provide a more interesting summary than the default ``u"running"``.
@@ -228,8 +264,18 @@ BuildStep
         Either or both keys can be omitted.
 
         This method is only called while the step is finished.
+        The step's result is available in ``self.results`` at that time.
 
-        New-style build steps should override this method to provide a more interesting summary than the default ``u"running"``, or to provide any build summary information.
+        New-style build steps should override this method to provide a more interesting summary than the default, or to provide any build summary information.
+
+
+    .. py:method:: getBuildResultSummary()
+
+        :returns: dictionary, optionally via Deferred
+
+        Returns a dictionary containing status information for a completed step.
+        This method calls :py:meth:`getResultSummary`, and automatically compute a ``build`` key from the ``step`` key according to the ``updateBuildSummaryPolicy``
+
 
     .. py:method:: describe(done=False)
 
@@ -293,36 +339,43 @@ BuildStep
     The following methods are provided as utilities to subclasses.
     These methods should only be invoked after the step is started.
 
-    .. py:method:: slaveVersion(command, oldversion=None)
+    .. py:method:: workerVersion(command, oldversion=None)
 
         :param command: command to examine
         :type command: string
-        :param oldversion: return value if the slave does not specify a version
+        :param oldversion: return value if the worker does not specify a version
         :returns: string
 
-        Fetch the version of the named command, as specified on the slave.
-        In practice, all commands on a slave have the same version, but passing ``command`` is still useful to ensure that the command is implemented on the slave.
-        If the command is not implemented on the slave, :meth:`slaveVersion` will return ``None``.
+        Fetch the version of the named command, as specified on the worker.
+        In practice, all commands on a worker have the same version, but passing ``command`` is still useful to ensure that the command is implemented on the worker.
+        If the command is not implemented on the worker, :meth:`workerVersion` will return ``None``.
 
         Versions take the form ``x.y`` where ``x`` and ``y`` are integers, and are compared as expected for version numbers.
 
-        Buildbot versions older than 0.5.0 did not support version queries; in this case, :meth:`slaveVersion` will return ``oldVersion``.
+        Buildbot versions older than 0.5.0 did not support version queries; in this case, :meth:`workerVersion` will return ``oldVersion``.
         Since such ancient versions of Buildbot are no longer in use, this functionality is largely vestigial.
 
-    .. py:method:: slaveVersionIsOlderThan(command, minversion)
+    .. py:method:: workerVersionIsOlderThan(command, minversion)
 
         :param command: command to examine
         :type command: string
         :param minversion: minimum version
         :returns: boolean
 
-        This method returns true if ``command`` is not implemented on the slave, or if it is older than ``minversion``.
+        This method returns true if ``command`` is not implemented on the worker, or if it is older than ``minversion``.
 
-    .. py:method:: getSlaveName()
+    .. py:method:: checkWorkerHasCommand(command)
+
+        :param command: command to examine
+        :type command: string
+
+        This method raise :py:class:`~buildbot.interfaces.WorkerTooOldError` if ``command`` is not implemented on the worker
+
+    .. py:method:: getWorkerName()
 
         :returns: string
 
-        Get the name of the buildslave assigned to this step.
+        Get the name of the worker assigned to this step.
 
     Most steps exist to run commands.
     While the details of exactly how those commands are constructed are left to subclasses, the execution of those commands comes down to this method:
@@ -332,34 +385,30 @@ BuildStep
         :param command: :py:class:`~buildbot.process.remotecommand.RemoteCommand` instance
         :returns: Deferred
 
-        This method connects the given command to the step's buildslave and runs it, returning the Deferred from :meth:`~buildbot.process.buildstep.RemoteCommand.run`.
+        This method connects the given command to the step's worker and runs it, returning the Deferred from :meth:`~buildbot.process.remotecommand.RemoteCommand.run`.
 
-    .. py:method:: addURL(name, url)
-
-        :param name: URL name
-        :param url: the URL
-
-        Add a link to the given ``url``, with the given ``name`` to displays of this step.
-        This allows a step to provide links to data that is not available in the log files.
-
-    The :class:`BuildStep` class provides minimal support for log handling, that is extended by the :class:`LoggingBuildStep` class.
-    The following methods provide some useful behaviors.
+    The :class:`BuildStep` class provides methods to add log data to the step.
+    Subclasses provide a great deal of user-configurable functionality on top of these methods.
     These methods can be called while the step is running, but not before.
 
-    .. py:method:: addLog(name)
+    .. py:method:: addLog(name, type="s", logEncoding=None)
 
         :param name: log name
-        :returns: :class:`~buildbot.status.logfile.LogFile` instance via Deferred
+        :param type: log type; see :bb:rtype:`logchunk`
+        :param logEncoding: the log encoding, or None to use the step or global default (see :ref:`Log-Encodings`)
+        :returns: :class:`~buildbot.process.log.Log` instance via Deferred
 
         Add a new logfile with the given name to the step, and return the log file instance.
 
     .. py:method:: getLog(name)
 
         :param name: log name
-        :returns: :class:`~buildbot.status.logfile.LogFile` instance
-        :raises: :exc:`KeyError` if the log is not found
+        :raises KeyError: if there is no such log
+        :returns: :class:`~buildbot.process.log.Log` instance
+        :raises KeyError: if no such log is defined
 
-        Get an existing logfile by name.
+        Return an existing logfile, previously added with :py:meth:`addLog`.
+        Note that this return value is synchronous, and only available after :py:meth:`addLog`'s deferred has fired.
 
     .. py:method:: addCompleteLog(name, text)
 
@@ -370,6 +419,9 @@ BuildStep
         This method adds a new log and sets ``text`` as its content.
         This is often useful to add a short logfile describing activities performed on the master.
         The logfile is immediately closed, and no further data can be added.
+
+        If the logfile's content is a bytestring, it is decoded with the step's log encoding or the global default log encoding.
+        To add a logfile with a different character encoding, perform the decode operation directly and pass the resulting unicode string to this method.
 
     .. py:method:: addHTMLLog(name, html)
 
@@ -389,14 +441,37 @@ BuildStep
 
         See :ref:`Adding-LogObservers` for more information on log observers.
 
+    .. py:method:: addLogWithFailure(why, logprefix='')
+
+        :param Failure why: the failure to log
+        :param logprefix: prefix for the log name
+        :returns: Deferred
+
+        Add log files displaying the given failure, named ``<logprefix>err.text`` and ``<logprefix>err.html``.
+
+    .. py:method:: addLogWithException(why, logprefix='')
+
+        :param Exception why: the exception to log
+        :param logprefix: prefix for the log name
+        :returns: Deferred
+
+        Similar to ``addLogWithFailure``, but for an Exception instead of a Failure.
+
+    Along with logs, build steps have an associated set of links that can be used to provide additional information for developers.
+    Those links are added during the build with this method:
+
+    .. py:method:: addURL(name, url)
+
+        :param name: URL name
+        :param url: the URL
+
+        Add a link to the given ``url``, with the given ``name`` to displays of this step.
+        This allows a step to provide links to data that is not available in the log files.
+
 LoggingBuildStep
 ----------------
 
-.. py:class:: LoggingBuildStep(logfiles, lazylogfiles, log_eval_func, name, locks, haltOnFailure, flunkOnWarnings, flunkOnFailure, warnOnWarnings, warnOnFailure, alwaysRun, progressMetrics, useProgress, doStepIf, hideStepIf)
-
-    :param logfiles: see :bb:step:`ShellCommand`
-    :param lazylogfiles: see :bb:step:`ShellCommand`
-    :param log_eval_func: see :bb:step:`ShellCommand`
+.. py:class:: LoggingBuildStep(name, locks, haltOnFailure, flunkOnWarnings, flunkOnFailure, warnOnWarnings, warnOnFailure, alwaysRun, progressMetrics, useProgress, doStepIf, hideStepIf)
 
     The remaining arguments are passed to the :class:`BuildStep` constructor.
 
@@ -413,8 +488,8 @@ LoggingBuildStep
     * provides hooks for summarizing and evaluating the command's result
     * supports lazy logfiles
     * handles the mechanics of starting, interrupting, and finishing remote commands
-    * detects lost slaves and finishes with a status of
-      :data:`~buildbot.status.results.RETRY`
+    * detects lost workers and finishes with a status of
+      :data:`~buildbot.process.results.RETRY`
 
     .. py:attribute:: logfiles
 
@@ -426,25 +501,37 @@ LoggingBuildStep
 
         Note that lazy logfiles cannot be specified using this method; they must be provided as constructor arguments.
 
-    .. py:method:: startCommand(command)
+    .. py:method:: setupLogsRunCommandAndProcessResults(cmd, stdioLog=None, closeLogWhenFinished=True, errorMessages=None, logfiles=None, lazylogfiles=False):
 
-        :param command: the :class:`~buildbot.process.buildstep.RemoteCommand`
+        :param command: the :class:`~buildbot.process.remotecommand.RemoteCommand`
             instance to start
+        :param stdioLog: an optional :class:`~buildbot.process.log.Log` object where the
+            stdout of the command will be stored.
+        :param closeLogWhenFinished: a boolean
+        :param logfiles: optional dictionary see :bb:step:`ShellCommand`
+        :param lazylogfiles: optional boolean see :bb:step:`ShellCommand`
+
+        :returns: step result from :mod:`buildbot.process.results`
 
         .. note::
 
-            This method permits an optional ``errorMessages`` parameter, allowing errors detected early in the command process to be logged.
-            It will be removed, and its use is deprecated.
+           This method permits an optional ``errorMessages`` parameter, allowing errors detected early in the command process to be logged.
+           It will be removed, and its use is deprecated.
 
          Handle all of the mechanics of running the given command.
-         This sets up all required logfiles, keeps status text up to date, and calls the utility hooks described below.
-         When the command is finished, the step is finished as well, making this class is unsuitable for steps that run more than one command in sequence.
+         This sets up all required logfiles, and calls the utility hooks described below.
 
-         Subclasses should override :meth:`~buildbot.process.buildstep.BuildStep.start` and, after setting up an appropriate command, call this method. ::
+         Subclasses should use that method if they want to launch multiple commands in a single step.
+         One could use that method, like for example ::
 
-            def start(self):
-                cmd = RemoteShellCommand(...)
-                self.startCommand(cmd, warnings)
+            @defer.inlineCallbacks
+            def run(self):
+                cmd = RemoteCommand(...)
+                res = yield self.setupLogRunCommandAndProcessResults(cmd)
+                if res == results.SUCCESS:
+                     cmd = RemoteCommand(...)
+                     res = yield self.setupLogRunCommandAndProcessResults(cmd)
+                defer.returnValue(res)
 
     To refine the status output, override one or more of the following methods.
     The :class:`LoggingBuildStep` implementations are stubs, so there is no need to call the parent method.
@@ -456,41 +543,12 @@ LoggingBuildStep
         This is a general-purpose hook method for subclasses.
         It will be called after the remote command has finished, but before any of the other hook functions are called.
 
-    .. py:method:: createSummary(stdio)
-
-        :param stdio: stdio :class:`~buildbot.status.logfile.LogFile`
-
-        This hook is designed to perform any summarization of the step, based either on the contents of the stdio logfile, or on instance attributes set earlier in the step processing.
-        Implementations of this method often call e.g., :meth:`~BuildStep.addURL`.
-
     .. py:method:: evaluateCommand(command)
 
         :param command: the just-completed remote command
-        :returns: step result from :mod:`buildbot.status.results`
+        :returns: step result from :mod:`buildbot.process.results`
 
         This hook should decide what result the step should have.
-        The default implementation invokes ``log_eval_func`` if it exists, and looks at :attr:`~buildbot.process.buildstep.RemoteCommand.rc` to distinguish :data:`~buildbot.status.results.SUCCESS` from :data:`~buildbot.status.results.FAILURE`.
-
-    The remaining methods provide an embarrassment of ways to set the summary of the step that appears in the various status interfaces.
-    The easiest way to affect this output is to override :meth:`~BuildStep.describe`.
-    If that is not flexible enough, override :meth:`getText` and/or :meth:`getText2`.
-
-    .. py:method:: getText(command, results)
-
-        :param command: the just-completed remote command
-        :param results: step result from :meth:`evaluateCommand`
-        :returns: a list of short strings
-
-        This method is the primary means of describing the step.
-        The default implementation calls :meth:`~BuildStep.describe`, which is usually the easiest method to override, and then appends a string describing the step status if it was not successful.
-
-    .. py:method:: getText2(command, results)
-
-        :param command: the just-completed remote command
-        :param results: step result from :meth:`evaluateCommand`
-        :returns: a list of short strings
-
-        Like :meth:`getText`, this method summarizes the step's result, but it is only called when that result affects the build, either by making it halt, flunk, or end with warnings.
 
 CommandMixin
 ------------
@@ -529,26 +587,33 @@ This class can only be used in new-style steps.
 
     .. py:method:: pathExists(path)
 
-        :param path path to test
+        :param path: path to test
         :returns: Boolean via Deferred
 
-        Determine if the given path exists on the slave (in any form - file, directory, or otherwise).
+        Determine if the given path exists on the worker (in any form - file, directory, or otherwise).
         This uses the ``stat`` command.
 
-    .. py:method:: glob(path)
+    .. py:method:: runGlob(path)
 
-        :param path path to test
+        :param path: path to test
         :returns: list of filenames
 
-        Get the list of files matching the given path pattern on the slave.
+        Get the list of files matching the given path pattern on the worker.
         This uses Python's ``glob`` module.
-        If the ``glob`` method fails, it aborts the step.
+        If the ``runGlob`` method fails, it aborts the step.
+
+    .. py:method:: getFileContentFromWorker(path, abandonOnFailure=False)
+
+        :param path: path of the file to download from worker
+        :returns: string via deferred (content of the file)
+
+        Get the content of a file on the worker.
 
 
 ShellMixin
 ----------
 
-Most Buildbot steps run shell commands on the slave, and Buildbot has an impressive array of configuration parameters to control that execution.
+Most Buildbot steps run shell commands on the worker, and Buildbot has an impressive array of configuration parameters to control that execution.
 The ``ShellMixin`` mixin provides the tools to make running shell commands easy and flexible.
 
 This class can only be used in new-style steps.
@@ -558,26 +623,26 @@ This class can only be used in new-style steps.
     This mixin manages the following step configuration parameters, the contents of which are documented in the manual.
     Naturally, all of these are renderable.
 
-    ..py:attribute:: command
-    ..py:attribute:: workdir
-    ..py:attribute:: env
-    ..py:attribute:: want_stdout
-    ..py:attribute:: want_stderr
-    ..py:attribute:: usePTY
-    ..py:attribute:: logfiles
-    ..py:attribute:: lazylogfiles
-    ..py:attribute:: timeout
-    ..py:attribute:: maxTime
-    ..py:attribute:: logEnviron
-    ..py:attribute:: interruptSignal
-    ..py:attribute:: sigtermTime
-    ..py:attribute:: initialStdin
-    ..py:attribute:: decodeRC
+    .. py:attribute:: command
+    .. py:attribute:: workdir
+    .. py:attribute:: env
+    .. py:attribute:: want_stdout
+    .. py:attribute:: want_stderr
+    .. py:attribute:: usePTY
+    .. py:attribute:: logfiles
+    .. py:attribute:: lazylogfiles
+    .. py:attribute:: timeout
+    .. py:attribute:: maxTime
+    .. py:attribute:: logEnviron
+    .. py:attribute:: interruptSignal
+    .. py:attribute:: sigtermTime
+    .. py:attribute:: initialStdin
+    .. py:attribute:: decodeRC
 
-    ..py:method:: setupShellMixin(constructorArgs, prohibitArgs=[])
+    .. py:method:: setupShellMixin(constructorArgs, prohibitArgs=[])
 
-        :param dict constructorArgs constructor keyword arguments
-        :param list prohibitArgs list of recognized arguments to reject
+        :param dict constructorArgs: constructor keyword arguments
+        :param list prohibitArgs: list of recognized arguments to reject
         :returns: keyword arguments destined for :py:class:`BuildStep`
 
         This method is intended to be called from the shell constructor, passed any keyword arguments not otherwise used by the step.
@@ -586,7 +651,7 @@ This class can only be used in new-style steps.
 
         The return value should be passed to the :py:class:`BuildStep` constructor.
 
-    ..py:method:: makeRemoteShellCommand(collectStdout=False, collectStderr=False, \**overrides)
+    .. py:method:: makeRemoteShellCommand(collectStdout=False, collectStderr=False, \**overrides)
 
         :param collectStdout: if true, the command's stdout wil be available in ``cmd.stdout`` on completion
         :param collectStderr: if true, the command's stderr wil be available in ``cmd.stderr`` on completion
@@ -594,7 +659,7 @@ This class can only be used in new-style steps.
         :returns: :py:class:`~buildbot.process.remotecommand.RemoteShellCommand` instance via Deferred
 
         This method constructs a :py:class:`~buildbot.process.remotecommand.RemoteShellCommand` instance based on the instance attributes and any supplied overrides.
-        It must be called while the step is running, as it examines the slave capabilities before creating the command.
+        It must be called while the step is running, as it examines the worker capabilities before creating the command.
         It takes care of just about everything:
 
          * Creating log files and associating them with the command
@@ -602,6 +667,10 @@ This class can only be used in new-style steps.
          * Selecting the appropriate workdir configuration
 
         All that remains is to run the command with :py:meth:`~buildbot.process.buildstep.BuildStep.runCommand`.
+
+    The :py:class:`ShellMixin` class implements :py:meth:`~buildbot.process.buildstep.BuildStep.getResultSummary`, returning a summary of the command.
+    If no command was specified or run, it falls back to the default ``getResultSummary`` based on ``descriptionDone``.
+    Subclasses can override this method to return a more appropriate status.
 
 Exceptions
 ----------

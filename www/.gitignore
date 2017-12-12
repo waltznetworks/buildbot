@@ -1,0 +1,10 @@
+MANIFEST.in
+build
+!base/src/app/builders/build
+dist/
+static/
+coverage/
+VERSION
+node_modules
+npm-debug.log
+libs/

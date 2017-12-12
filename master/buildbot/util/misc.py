@@ -12,60 +12,37 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
 """
 Miscellaneous utilities; these should be imported from C{buildbot.util}, not
 directly from this module.
 """
 
-from twisted.internet import defer
-from twisted.python import log
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import string_types
+
+from twisted.internet import reactor
 
 
 def deferredLocked(lock_or_attr):
     def decorator(fn):
         def wrapper(*args, **kwargs):
             lock = lock_or_attr
-            if isinstance(lock, basestring):
+            if isinstance(lock, string_types):
                 lock = getattr(args[0], lock)
             return lock.run(fn, *args, **kwargs)
         return wrapper
     return decorator
 
 
-class SerializedInvocation(object):
+def cancelAfter(seconds, deferred, _reactor=reactor):
+    delayedCall = _reactor.callLater(seconds, deferred.cancel)
 
-    def __init__(self, method):
-        self.method = method
-        self.running = False
-        self.pending_deferreds = []
+    # cancel the delayedCall when the underlying deferred fires
+    @deferred.addBoth
+    def cancelTimer(x):
+        if delayedCall.active():
+            delayedCall.cancel()
+        return x
 
-    def __call__(self):
-        d = defer.Deferred()
-        self.pending_deferreds.append(d)
-        if not self.running:
-            self.start()
-        return d
-
-    def start(self):
-        self.running = True
-        invocation_deferreds = self.pending_deferreds
-        self.pending_deferreds = []
-        d = self.method()
-        d.addErrback(log.err, 'in invocation of %r' % (self.method,))
-
-        def notify_callers(_):
-            for d in invocation_deferreds:
-                d.callback(None)
-        d.addCallback(notify_callers)
-
-        def next(_):
-            self.running = False
-            if self.pending_deferreds:
-                self.start()
-            else:
-                self._quiet()
-        d.addBoth(next)
-
-    def _quiet(self):  # hook for tests
-        pass
+    return deferred

@@ -13,16 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import interfaces
-from buildbot.status.logfile import HEADER
-from buildbot.status.logfile import STDERR
-from buildbot.status.logfile import STDOUT
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from cStringIO import StringIO
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import itervalues
+
+import functools
+
 from twisted.internet import defer
 from twisted.python import failure
-from zope.interface import implements
+
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
+from buildbot.test.fake import logfile
 
 
 class FakeRemoteCommand(object):
@@ -34,8 +36,10 @@ class FakeRemoteCommand(object):
 
     def __init__(self, remote_command, args,
                  ignore_updates=False, collectStdout=False, collectStderr=False,
-                 decodeRC={0: SUCCESS},
+                 decodeRC=None,
                  stdioLogName='stdio'):
+        if decodeRC is None:
+            decodeRC = {0: SUCCESS}
         # copy the args and set a few defaults
         self.remote_command = remote_command
         self.args = args.copy()
@@ -52,14 +56,14 @@ class FakeRemoteCommand(object):
         if collectStderr:
             self.stderr = ''
 
-    def run(self, step, remote):
+    def run(self, step, conn, builder_name):
         # delegate back to the test case
-        return self.testcase._remotecommand_run(self, step, remote)
+        return self.testcase._remotecommand_run(self, step, conn, builder_name)
 
-    def useLog(self, log, closeWhenFinished=False, logfileName=None):
+    def useLog(self, log_, closeWhenFinished=False, logfileName=None):
         if not logfileName:
-            logfileName = log.getName()
-        self.logs[logfileName] = log
+            logfileName = log_.getName()
+        self.logs[logfileName] = log_
 
     def useLogDelayed(self, logfileName, activateCallBack, closeWhenFinished=False):
         self.delayedLogs[logfileName] = (activateCallBack, closeWhenFinished)
@@ -77,8 +81,8 @@ class FakeRemoteCommand(object):
 
     def fakeLogData(self, step, log, header='', stdout='', stderr=''):
         # note that this should not be used in the same test as useLog(Delayed)
-        self.logs[log] = l = FakeLogFile(log, step)
-        l.fakeData(header=header, stdout=stdout, stderr=stderr)
+        self.logs[log] = fakelog = logfile.FakeLogFile(log, step)
+        fakelog.fakeData(header=header, stdout=stdout, stderr=stderr)
 
     def __repr__(self):
         return "FakeRemoteCommand(" + repr(self.remote_command) + "," + repr(self.args) + ")"
@@ -88,11 +92,15 @@ class FakeRemoteShellCommand(FakeRemoteCommand):
 
     def __init__(self, workdir, command, env=None,
                  want_stdout=1, want_stderr=1,
-                 timeout=20 * 60, maxTime=None, sigtermTime=None, logfiles={},
-                 usePTY="slave-config", logEnviron=True, collectStdout=False,
+                 timeout=20 * 60, maxTime=None, sigtermTime=None, logfiles=None,
+                 usePTY=None, logEnviron=True, collectStdout=False,
                  collectStderr=False,
-                 interruptSignal=None, initialStdin=None, decodeRC={0: SUCCESS},
+                 interruptSignal=None, initialStdin=None, decodeRC=None,
                  stdioLogName='stdio'):
+        if logfiles is None:
+            logfiles = {}
+        if decodeRC is None:
+            decodeRC = {0: SUCCESS}
         args = dict(workdir=workdir, command=command, env=env or {},
                     want_stdout=want_stdout, want_stderr=want_stderr,
                     initial_stdin=initialStdin,
@@ -103,74 +111,6 @@ class FakeRemoteShellCommand(FakeRemoteCommand):
                                    collectStderr=collectStderr,
                                    decodeRC=decodeRC,
                                    stdioLogName=stdioLogName)
-
-
-class FakeLogFile(object):
-    implements(interfaces.IStatusLog, interfaces.ILogFile)
-
-    def __init__(self, name, step):
-        self.name = name
-        self.header = ''
-        self.stdout = ''
-        self.stderr = ''
-        self.chunks = []
-        self.step = step
-
-    def getName(self):
-        return self.name
-
-    def addHeader(self, text):
-        self.header += text
-        self.chunks.append((HEADER, text))
-
-    def addStdout(self, text):
-        self.stdout += text
-        self.chunks.append((STDOUT, text))
-        if self.name in self.step.logobservers:
-            for obs in self.step.logobservers[self.name]:
-                obs.outReceived(text)
-
-    def addStderr(self, text):
-        self.stderr += text
-        self.chunks.append((STDERR, text))
-        if self.name in self.step.logobservers:
-            for obs in self.step.logobservers[self.name]:
-                obs.errReceived(text)
-
-    def readlines(self):
-        io = StringIO(self.stdout)
-        return io.readlines()
-
-    def getText(self):
-        return ''.join([c for str, c in self.chunks
-                        if str in (STDOUT, STDERR)])
-
-    def getTextWithHeaders(self):
-        return ''.join([c for str, c in self.chunks])
-
-    def getChunks(self, channels=[], onlyText=False):
-        if onlyText:
-            return [data
-                    for (ch, data) in self.chunks
-                    if not channels or ch in channels]
-        else:
-            return [(ch, data)
-                    for (ch, data) in self.chunks
-                    if not channels or ch in channels]
-
-    def finish(self):
-        pass
-
-    def fakeData(self, header='', stdout='', stderr=''):
-        if header:
-            self.header += header
-            self.chunks.append((HEADER, header))
-        if stdout:
-            self.stdout += stdout
-            self.chunks.append((STDOUT, stdout))
-        if stderr:
-            self.stderr += stderr
-            self.chunks.append((STDERR, stderr))
 
 
 class ExpectRemoteRef(object):
@@ -213,13 +153,15 @@ class Expect(object):
 
     """
 
-    def __init__(self, remote_command, args, incomparable_args=[]):
+    def __init__(self, remote_command, args, incomparable_args=None):
         """
 
         Expect a command named C{remote_command}, with args C{args}.  Any args
         in C{incomparable_args} are not cmopared, but must exist.
 
         """
+        if incomparable_args is None:
+            incomparable_args = []
         self.remote_command = remote_command
         self.incomparable_args = incomparable_args
         self.args = args
@@ -260,6 +202,16 @@ class Expect(object):
         """
         if behavior == 'rc':
             command.rc = args[0]
+            d = defer.succeed(None)
+            for log in itervalues(command.logs):
+                if hasattr(log, 'unwrap'):
+                    # We're handling an old style log that was
+                    # used in an old style step. We handle the necessary
+                    # stuff to make the make sync/async log hack work.
+                    d.addCallback(
+                        functools.partial(lambda log, _: log.unwrap(), log))
+                    d.addCallback(lambda l: l.flushFakeLogfile())
+            return d
         elif behavior == 'err':
             return defer.fail(args[0])
         elif behavior == 'update':
@@ -291,6 +243,58 @@ class Expect(object):
         for behavior in self.behaviors:
             yield self.runBehavior(behavior[0], behavior[1:], command)
 
+    def expectationPassed(self, exp):
+        """
+        Some expectations need to be able to distinguish pass/fail of
+        nested expectations.
+
+        This will get invoked once for every nested exception and once
+        for self unless anything fails.  Failures are passed to raiseExpectationFailure for
+        handling.
+
+        @param exp: The nested exception that passed or self.
+        """
+        pass
+
+    def raiseExpectationFailure(self, exp, failure):
+        """
+        Some expectations may wish to suppress failure.
+        The default expectation does not.
+
+        This will get invoked if the expectations fails on a command.
+
+        @param exp: the expectation that failed.  this could be self or a nested exception
+        """
+        raise failure
+
+    def shouldAssertCommandEqualExpectation(self):
+        """
+        Whether or not we should validate that the current command matches the expectation.
+        Some expectations may not have a way to match a command.
+        """
+        return True
+
+    def shouldRunBehaviors(self):
+        """
+        Whether or not, once the command matches the expectation,
+        the behaviors should be run for this step.
+        """
+        return True
+
+    def shouldKeepMatchingAfter(self, command):
+        """
+        Expectations are by default not kept matching multiple commands.
+
+        Return True if you want to re-use a command for multiple commands.
+        """
+        return False
+
+    def nestedExpectations(self):
+        """
+        Any sub-expectations that should be validated.
+        """
+        return []
+
     def __repr__(self):
         return "Expect(" + repr(self.remote_command) + ")"
 
@@ -302,10 +306,14 @@ class ExpectShell(Expect):
     non-default arguments must be specified explicitly (e.g., usePTY).
     """
 
-    def __init__(self, workdir, command, env={},
+    def __init__(self, workdir, command, env=None,
                  want_stdout=1, want_stderr=1, initialStdin=None,
-                 timeout=20 * 60, maxTime=None, logfiles={},
-                 usePTY="slave-config", logEnviron=True):
+                 timeout=20 * 60, maxTime=None, logfiles=None,
+                 usePTY=None, logEnviron=True):
+        if env is None:
+            env = {}
+        if logfiles is None:
+            logfiles = {}
         args = dict(workdir=workdir, command=command, env=env,
                     want_stdout=want_stdout, want_stderr=want_stderr,
                     initial_stdin=initialStdin,

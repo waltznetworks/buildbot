@@ -13,14 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import print_function
 
 import os
 
-from buildbot.test.util import dirs
-from buildbot.util import maildir
 from twisted.internet import defer
 from twisted.trial import unittest
+
+from buildbot.test.util import dirs
+from buildbot.util import maildir
 
 
 class TestMaildirService(dirs.DirsMixin, unittest.TestCase):
@@ -89,7 +91,8 @@ class TestMaildirService(dirs.DirsMixin, unittest.TestCase):
         newfile = os.path.join(self.newdir, "newmsg")
         open(tmpfile, "w").close()
         os.rename(tmpfile, newfile)
-        self.svc.moveToCurDir("newmsg")
+        f = self.svc.moveToCurDir("newmsg")
+        f.close()
         self.assertEqual([os.path.exists(os.path.join(d, "newmsg"))
                           for d in (self.newdir, self.curdir, self.tmpdir)],
                          [False, True, False])

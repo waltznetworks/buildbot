@@ -8,7 +8,7 @@ As a result, custom build steps which call these methods will need to be rewritt
 
 Buildbot-0.8.9 supports old-style steps natively, while new-style steps are emulated.
 Buildbot-0.9.0 supports new-style steps natively, while old-style steps are emulated.
-Later versions of Buildbot wil not support old-style steps at all.
+Later versions of Buildbot will not support old-style steps at all.
 All custom steps should be rewritten in the new style as soon as possible.
 
 Buildbot distinguishes new-style from old-style steps by the presence of a :py:meth:`~buildbot.process.buildstep.BuildStep.run` method.
@@ -24,17 +24,36 @@ Summary of Changes
   However, it does not support log-reading methods such as ``getText``.
   It was never advisable to handle logs as enormous strings.
   New-style steps should, instead, use a LogObserver or (in Buildbot-0.9.0) fetch log lines bit by bit using the data API.
-* :py:class:`buildbot.process.buildstep.LoggingBuildStep` is deprecated and cannot be uesd in new-style steps.
+* :py:class:`buildbot.process.buildstep.LoggingBuildStep` is deprecated and cannot be used in new-style steps.
   Mix in :py:class:`buildbot.process.buildstep.ShellMixin` instead.
+* Step strings, derived by parameters like ``description``, ``descriptionDone``, and ``descriptionSuffix``, are no longer treated as lists.
+  For backward compatibility, the parameters may still be given as lists, but will be joined with spaces during execution (using :py:func:`~buildbot.util.join_list`).
+
+Backward Compatibility
+++++++++++++++++++++++
+
+Some hacks are in place to support old-style steps.
+These hacks are only activated when an old-style step is detected.
+Support for old-style steps will be dropped soon after Buildbot-0.9.0 is released.
+
+* The Deferreds from all asynchronous methods invoked during step execution are gathered internally.
+  The step is not considered finished until all such Deferreds have fired, and is marked EXCEPTION if any fail.
+  For logfiles, this is accomplished by means of a synchronous wrapper class.
+
+* Logfile data is available while the step is still in memory.
+  This means that logs returned from ``step.getLog`` have the expected methods ``getText``, ``readlines`` and so on.
+
+* :py:class:`~buildbot.steps.shell.ShellCommand` subclasses implicitly gather all stdio output in memory and provide it to the ``createSummary`` method.
 
 Rewriting ``start``
 +++++++++++++++++++
 
 If your custom buildstep implements the ``start`` method, then rename that method to ``run`` and set it up to return a Deferred, either explicitly or via ``inlineCallbacks``.
-The value of the Deferred should be the result of the step (one of the codes in :py:mod:`buildbot.status.results`), or a Twisted failure instance to complete the step as EXCEPTION.
+The value of the Deferred should be the result of the step (one of the codes in :py:mod:`buildbot.process.results`), or a Twisted failure instance to complete the step as EXCEPTION.
 The new ``run`` method should *not* call ``self.finished`` or ``self.failed``, instead signalling the same via Deferred.
 
-For example, the following old-style ``start`` method::
+For example, the following old-style ``start`` method ::
+
 
     def start(self):  ## old style
         cmd = remotecommand.RemoteCommand('stat', {'file': self.file })
@@ -42,13 +61,13 @@ For example, the following old-style ``start`` method::
         d.addCallback(lambda res: self.convertResult(cmd))
         d.addErrback(self.failed)
 
-Becomes::
+Becomes ::
 
     @defer.inlineCallbacks
     def run(self):  ## new style
         cmd = remotecommand.RemoteCommand('stat', {'file': self.file })
         yield self.runCommand(cmd)
-        yield self.convertResult(cmd)
+        defer.returnValue(self.convertResult(cmd))
 
 Newly Asynchronous Methods
 ++++++++++++++++++++++++++
@@ -70,7 +89,7 @@ The following methods now return a Deferred:
 
 Any custom code in a new-style step that calls these methods must handle the resulting Deferred.
 In some cases, that means that the calling method's signature will change.
-For example::
+For example ::
 
     def summarize(self):  ## old-style
         for m in self.MESSAGES:

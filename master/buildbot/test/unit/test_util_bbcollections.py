@@ -13,8 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.util import bbcollections
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.trial import unittest
+
+from buildbot.util import bbcollections
 
 
 class KeyedSets(unittest.TestCase):

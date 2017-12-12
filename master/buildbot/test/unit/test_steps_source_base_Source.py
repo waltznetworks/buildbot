@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
 from twisted.trial import unittest
@@ -22,7 +25,7 @@ from buildbot.test.util import sourcesteps
 from buildbot.test.util import steps
 
 
-class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
+class TestSource(sourcesteps.SourceStepMixin, unittest.SynchronousTestCase):
 
     def setUp(self):
         return self.setUpBuildStep()
@@ -35,9 +38,9 @@ class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
                               {
                                   'branch': 'other-branch',
                                   'revision': 'revision',
-                              },
-                              patch='patch'
-                              )
+        },
+            patch='patch'
+        )
         step.branch = 'branch'
         step.startVC = mock.Mock()
 
@@ -50,15 +53,16 @@ class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
                               {
                                   'branch': 'other-branch',
                                   'revision': 'revision',
-                              },
-                              patch='patch'
-                              )
+        },
+            patch='patch'
+        )
         step.branch = 'branch'
         step.startVC = mock.Mock()
 
         step.startStep(mock.Mock())
 
-        self.assertEqual(step.startVC.call_args, (('other-branch', 'revision', 'patch'), {}))
+        self.assertEqual(
+            step.startVC.call_args, (('other-branch', 'revision', 'patch'), {}))
 
     def test_start_alwaysUseLatest_False_no_branch(self):
         step = self.setupStep(Source())
@@ -92,7 +96,8 @@ class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
         step.build.getSourceStamp.return_value = None
 
         self.assertEqual(step.describe(), ['updating', 'codebase'])
-        self.assertEqual(step.name, Source.name + " codebase")
+        step.name = self.successResultOf(step.build.render(step.name))
+        self.assertEqual(step.name, Source.name + "-codebase")
 
         step.startStep(mock.Mock())
         self.assertEqual(step.build.getSourceStamp.call_args[0], ('codebase',))
@@ -108,7 +113,8 @@ class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
         step.build.getSourceStamp.return_value = None
 
         self.assertEqual(step.describe(), ['updating', 'suffix'])
-        self.assertEqual(step.name, Source.name + " my-code")
+        step.name = self.successResultOf(step.build.render(step.name))
+        self.assertEqual(step.name, Source.name + "-my-code")
 
         step.startStep(mock.Mock())
         self.assertEqual(step.build.getSourceStamp.call_args[0], ('my-code',))
@@ -137,3 +143,44 @@ class TestSourceDescription(steps.BuildStepMixin, unittest.TestCase):
                       descriptionDone=['svn', 'update'])
         self.assertEqual(step.description, ['svn', 'update', '(running)'])
         self.assertEqual(step.descriptionDone, ['svn', 'update'])
+
+
+class AttrGroup(Source):
+
+    def other_method(self):
+        pass
+
+    def mode_full(self):
+        pass
+
+    def mode_incremental(self):
+        pass
+
+
+class TestSourceAttrGroup(sourcesteps.SourceStepMixin, unittest.TestCase):
+
+    def setUp(self):
+        return self.setUpBuildStep()
+
+    def tearDown(self):
+        return self.tearDownBuildStep()
+
+    def test_attrgroup_hasattr(self):
+        step = AttrGroup()
+        self.assertTrue(step._hasAttrGroupMember('mode', 'full'))
+        self.assertTrue(step._hasAttrGroupMember('mode', 'incremental'))
+        self.assertFalse(step._hasAttrGroupMember('mode', 'nothing'))
+
+    def test_attrgroup_getattr(self):
+        step = AttrGroup()
+        self.assertEqual(step._getAttrGroupMember('mode', 'full'),
+                         step.mode_full)
+        self.assertEqual(step._getAttrGroupMember('mode', 'incremental'),
+                         step.mode_incremental)
+        self.assertRaises(AttributeError,
+                          step._getAttrGroupMember, 'mode', 'nothing')
+
+    def test_attrgroup_listattr(self):
+        step = AttrGroup()
+        self.assertEqual(sorted(step._listAttrGroupMembers('mode')),
+                         ['full', 'incremental'])

@@ -13,91 +13,99 @@
 #
 # Copyright Buildbot Team Members
 
-from twisted.application import service
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
-from twisted.internet import reactor
-from twisted.internet import task
 from twisted.python import log
-from zope.interface import implements
+from zope.interface import implementer
 
-from buildbot import util
+from buildbot import config
 from buildbot.interfaces import IChangeSource
+from buildbot.util import service
+from buildbot.util.poll import method as poll_method
 
 
-class ChangeSource(service.Service, util.ComparableMixin):
-    implements(IChangeSource)
-
-    master = None
-    "if C{self.running} is true, then C{cs.master} points to the buildmaster."
+@implementer(IChangeSource)
+class ChangeSource(service.ClusteredBuildbotService):
 
     def describe(self):
         pass
 
+    # activity handling
 
-class PollingChangeSource(ChangeSource):
+    def activate(self):
+        return defer.succeed(None)
 
-    """
-    Utility subclass for ChangeSources that use some kind of periodic polling
-    operation.  Subclasses should define C{poll} and set C{self.pollInterval}.
-    The rest is taken care of.
+    def deactivate(self):
+        return defer.succeed(None)
 
-    Any subclass will be available via the "poller" webhook.
-    """
+    # service handling
 
-    pollInterval = 60
-    "time (in seconds) between calls to C{poll}"
+    def _getServiceId(self):
+        return self.master.data.updates.findChangeSourceId(self.name)
 
-    pollAtLaunch = False
-    "determines when the first poll occurs. True = immediately on launch, False = wait for one pollInterval."
+    def _claimService(self):
+        return self.master.data.updates.trySetChangeSourceMaster(self.serviceid,
+                                                                 self.master.masterid)
 
-    _loop = None
+    def _unclaimService(self):
+        return self.master.data.updates.trySetChangeSourceMaster(self.serviceid,
+                                                                 None)
 
-    def __init__(self, name=None, pollInterval=60 * 10, pollAtLaunch=False):
-        if name:
-            self.setName(name)
-        self.pollInterval = pollInterval
+
+class ReconfigurablePollingChangeSource(ChangeSource):
+    pollInterval = None
+    pollAtLaunch = None
+
+    def checkConfig(self, name=None, pollInterval=60 * 10, pollAtLaunch=False):
+        ChangeSource.checkConfig(self, name=name)
+        if pollInterval < 0:
+            config.error("interval must be >= 0: {}".format(pollInterval))
+
+    @defer.inlineCallbacks
+    def reconfigService(self, name=None, pollInterval=60 * 10, pollAtLaunch=False):
+        self.pollInterval, prevPollInterval = pollInterval, self.pollInterval
         self.pollAtLaunch = pollAtLaunch
+        yield ChangeSource.reconfigService(self, name=name)
 
-        self.doPoll = util.misc.SerializedInvocation(self.doPoll)
+        # pollInterval change is the only value which makes sense to reconfigure check.
+        if prevPollInterval != pollInterval and self.doPoll.started:
+            yield self.doPoll.stop()
+            # As a implementation detail, poller will 'pollAtReconfigure' if poll interval changes
+            # and pollAtLaunch=True
+            yield self.doPoll.start(interval=self.pollInterval, now=self.pollAtLaunch)
 
+    def poll(self):
+        pass
+
+    @poll_method
     def doPoll(self):
-        """
-        This is the method that is called by LoopingCall to actually poll.
-        It may also be called by change hooks to request a poll.
-        It is serialiazed - if you call it while a poll is in progress
-        then the 2nd invocation won't start until the 1st has finished.
-        """
         d = defer.maybeDeferred(self.poll)
         d.addErrback(log.err, 'while polling for changes')
         return d
 
-    def poll(self):
-        """
-        Perform the polling operation, and return a deferred that will fire
-        when the operation is complete.  Failures will be logged, but the
-        method will be called again after C{pollInterval} seconds.
-        """
+    def force(self):
+        self.doPoll()
 
-    def startLoop(self):
-        self._loop = task.LoopingCall(self.doPoll)
-        self._loop.start(self.pollInterval, now=self.pollAtLaunch)
+    def activate(self):
+        self.doPoll.start(interval=self.pollInterval, now=self.pollAtLaunch)
 
-    def stopLoop(self):
-        if self._loop and self._loop.running:
-            self._loop.stop()
-            self._loop = None
+    def deactivate(self):
+        return self.doPoll.stop()
 
-    def startService(self):
-        ChangeSource.startService(self)
 
-        # delay starting doing anything until the reactor is running - if
-        # services are still starting up, they may miss an initial flood of
-        # changes
-        if self.pollInterval:
-            reactor.callWhenRunning(self.startLoop)
-        else:
-            reactor.callWhenRunning(self.doPoll)
+class PollingChangeSource(ReconfigurablePollingChangeSource):
+    # Legacy code will be very painful to port to BuildbotService life cycle
+    # because the unit tests keep doing shortcuts for the Service life cycle (i.e by no calling startService)
+    # instead of porting everything at once, we make a class to support legacy
 
-    def stopService(self):
-        self.stopLoop()
-        return ChangeSource.stopService(self)
+    def checkConfig(self, name=None, pollInterval=60 * 10, pollAtLaunch=False):
+        ReconfigurablePollingChangeSource.checkConfig(self, name=name, pollInterval=60 * 10, pollAtLaunch=False)
+        self.pollInterval = pollInterval
+        self.pollAtLaunch = pollAtLaunch
+
+    def reconfigService(self, *args, **kwargs):
+        # BuildbotServiceManager will detect such exception and swap old service with new service,
+        # instead of just reconfiguring
+        raise NotImplementedError()

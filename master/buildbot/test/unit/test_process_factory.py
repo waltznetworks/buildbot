@@ -12,6 +12,11 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+
 from random import choice
 from string import ascii_uppercase
 
@@ -60,7 +65,8 @@ class TestBuildFactory(unittest.TestCase):
         self.assertEqual(self.factory.steps[-1],
                          _BuildStepFactory(BuildStep, name='test'))
 
-        warnings = self.flushWarnings([self.test_addStep_deprecated_withArguments])
+        warnings = self.flushWarnings(
+            [self.test_addStep_deprecated_withArguments])
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]['category'], DeprecationWarning)
 
@@ -84,7 +90,8 @@ class TestBuildFactory(unittest.TestCase):
         to construct a step.
         """
         stepFactory = s(BuildStep, name='test')
-        self.assertEqual(stepFactory, _BuildStepFactory(BuildStep, name='test'))
+        self.assertEqual(
+            stepFactory, _BuildStepFactory(BuildStep, name='test'))
         warnings = self.flushWarnings([self.test_s])
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]['category'], DeprecationWarning)
@@ -94,7 +101,8 @@ class TestBuildFactory(unittest.TestCase):
         self.assertRaises(TypeError, self.factory.addStep, object())
 
     def test_addStep_ArgumentsInTheWrongPlace(self):
-        self.assertRaises(TypeError, self.factory.addStep, BuildStep(), name="name")
+        self.assertRaises(
+            TypeError, self.factory.addStep, BuildStep(), name="name")
         # this also raises a deprecation error, which we don't care about (see
         # test_s)
         self.flushWarnings()
@@ -112,8 +120,9 @@ class TestGNUAutoconf(TestBuildFactory):
         self.factory = GNUAutoconf(source=BuildStep())
 
     def test_init(self):
-        # actual initialisation is already done by setUp
+        # actual initialization is already done by setUp
         configurePresent = False
+        compilePresent = False
         checkPresent = False
         distcheckPresent = False
         for step in self.factory.steps:
@@ -122,6 +131,8 @@ class TestGNUAutoconf(TestBuildFactory):
             # the following checks are rather hairy and should be
             # rewritten less implementation dependent.
             try:
+                if step.buildStep().command == ['make', 'all']:
+                    compilePresent = True
                 if step.buildStep().command == ['make', 'check']:
                     checkPresent = True
                 if step.buildStep().command == ['make', 'distcheck']:
@@ -130,8 +141,23 @@ class TestGNUAutoconf(TestBuildFactory):
                 pass
 
         self.assertTrue(configurePresent)
+        self.assertTrue(compilePresent)
         self.assertTrue(checkPresent)
         self.assertTrue(distcheckPresent)
+
+    def test_init_none(self):
+        """Default steps can be uninitialized by setting None"""
+
+        self.factory = GNUAutoconf(source=BuildStep(), compile=None, test=None,
+                                   distcheck=None)
+        for step in self.factory.steps:
+            try:
+                cmd = step.buildStep().command
+                self.assertNotIn(cmd, [['make', 'all'], ['make', 'check'],
+                                 ['make', 'distcheck']],
+                                 "Build step %s should not be present." % cmd)
+            except(AttributeError, KeyError):
+                pass
 
     def test_init_reconf(self):
         # test reconf = True

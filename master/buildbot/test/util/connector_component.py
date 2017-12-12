@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from buildbot.db import model
 from buildbot.test.fake import fakemaster
 from buildbot.test.util import db
@@ -35,26 +38,29 @@ class ConnectorComponentMixin(db.RealDatabaseMixin):
     @ivar db.model: DB model
     """
 
-    def setUpConnectorComponent(self, table_names=[], basedir='basedir'):
+    def setUpConnectorComponent(self, table_names=None, basedir='basedir'):
         """Set up C{self.db}, using the given db_url and basedir."""
+        if table_names is None:
+            table_names = []
+
         d = self.setUpRealDatabase(table_names=table_names, basedir=basedir)
 
+        @d.addCallback
         def finish_setup(_):
             self.db = FakeDBConnector()
             self.db.pool = self.db_pool
-            self.db.model = model.Model(self.db)
             self.db.master = fakemaster.make_master()
-        d.addCallback(finish_setup)
+            self.db.model = model.Model(self.db)
         return d
 
     def tearDownConnectorComponent(self):
         d = self.tearDownRealDatabase()
 
+        @d.addCallback
         def finish_cleanup(_):
             self.db_pool.shutdown()
             # break some reference loops, just for fun
             del self.db.pool
             del self.db.model
             del self.db
-        d.addCallback(finish_cleanup)
         return d

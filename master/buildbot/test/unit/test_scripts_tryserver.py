@@ -13,15 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import print_function
 
 import os
 import sys
 
+from twisted.python.compat import NativeStringIO
+from twisted.trial import unittest
+
 from buildbot.scripts import tryserver
 from buildbot.test.util import dirs
-from cStringIO import StringIO
-from twisted.trial import unittest
 
 
 class TestStatusLog(dirs.DirsMixin, unittest.TestCase):
@@ -33,7 +35,7 @@ class TestStatusLog(dirs.DirsMixin, unittest.TestCase):
 
     def test_trycmd(self):
         config = dict(jobdir='jobdir')
-        inputfile = StringIO('this is my try job')
+        inputfile = NativeStringIO('this is my try job')
         self.patch(sys, 'stdin', inputfile)
 
         rc = tryserver.tryserver(config)

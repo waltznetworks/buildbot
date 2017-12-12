@@ -13,19 +13,19 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import os
+from binascii import hexlify
+from hashlib import sha1
 
 from twisted.internet import defer
 from twisted.python import log
 
+from buildbot.util import bytes2NativeString
 from buildbot.util import flatten
-
-try:
-    from hashlib import sha1 as sha
-    assert sha
-except ImportError:
-    # For Python 2.4
-    import sha
+from buildbot.util import unicode2bytes
 
 srcs = ['git', 'svn', 'hg', 'cvs', 'darcs', 'bzr']
 salt_len = 8
@@ -41,7 +41,7 @@ def createUserObject(master, author, src=None):
     @type master: master.Buildmaster instance
 
     @param authors: Change author if string or Authz instance
-    @type authors: string or status.web.authz instance
+    @type authors: string or www.authz instance
 
     @param src: source from which the User Object will be created
     @type src: string
@@ -107,7 +107,8 @@ def _filter(contacts):
 
 
 def getUsersContacts(master, contact_types, uids):
-    d = defer.gatherResults([getUserContact(master, contact_types, uid) for uid in uids])
+    d = defer.gatherResults(
+        [getUserContact(master, contact_types, uid) for uid in uids])
     d.addCallback(_filter)
     return d
 
@@ -119,7 +120,8 @@ def getChangeContacts(master, change, contact_types):
 
 
 def getSourceStampContacts(master, ss, contact_types):
-    dl = [getChangeContacts(master, change, contact_types) for change in ss.changes]
+    dl = [getChangeContacts(master, change, contact_types)
+          for change in ss.changes]
     if False and ss.patch_info:
         d = master.db.users.getUserByUsername(ss.patch_into[0])
         d.addCallback(_extractContact, contact_types, ss.patch_info[0])
@@ -162,14 +164,10 @@ def encrypt(passwd):
 
     @returns: encrypted/salted string
     """
-    try:
-        m = sha()
-    except TypeError:
-        m = sha.new()
-
-    salt = os.urandom(salt_len).encode('hex_codec')
-    m.update(passwd + salt)
-    crypted = salt + m.hexdigest()
+    m = sha1()
+    salt = hexlify(os.urandom(salt_len))
+    m.update(unicode2bytes(passwd) + salt)
+    crypted = bytes2NativeString(salt) + m.hexdigest()
     return crypted
 
 
@@ -183,13 +181,9 @@ def check_passwd(guess, passwd):
 
     @returns: boolean
     """
-    try:
-        m = sha()
-    except TypeError:
-        m = sha.new()
-
+    m = sha1()
     salt = passwd[:salt_len * 2]  # salt_len * 2 due to encode('hex_codec')
-    m.update(guess + salt)
-    crypted_guess = salt + m.hexdigest()
+    m.update(unicode2bytes(guess) + unicode2bytes(salt))
+    crypted_guess = bytes2NativeString(salt) + m.hexdigest()
 
-    return (crypted_guess == passwd)
+    return (crypted_guess == bytes2NativeString(passwd))

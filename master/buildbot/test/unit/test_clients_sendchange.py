@@ -13,14 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
 
 import mock
 
-from buildbot.clients import sendchange
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.spread import pb
 from twisted.trial import unittest
+
+from buildbot.clients import sendchange
 
 
 class Sender(unittest.TestCase):
@@ -199,7 +202,7 @@ class Sender(unittest.TestCase):
                      category=u'\U0001F640',  # WEARY CAT FACE
                      when=1234,
                      # NOTE: not decoded!
-                     properties={'\xc4\x81': 'b'},
+                     properties={b'\xc4\x81': 'b'},
                      revlink=u'\U0001F517',  # LINK SYMBOL
                      src=None)])
         d.addCallback(check)
@@ -235,7 +238,7 @@ class Sender(unittest.TestCase):
                      category=u'\N{PILCROW SIGN}',
                      when=1234,
                      # NOTE: not decoded!
-                     properties={'\xb9': 'b'},
+                     properties={b'\xb9': 'b'},
                      revlink=u'\N{INVERTED QUESTION MARK}',
                      src=None)])
         d.addCallback(check)

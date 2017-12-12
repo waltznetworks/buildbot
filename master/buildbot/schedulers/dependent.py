@@ -13,86 +13,103 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.internet import defer
+
 from buildbot import config
 from buildbot import interfaces
 from buildbot import util
+from buildbot.process.results import SUCCESS
+from buildbot.process.results import WARNINGS
 from buildbot.schedulers import base
-from buildbot.status.results import SUCCESS
-from buildbot.status.results import WARNINGS
-from twisted.internet import defer
-from twisted.python import log
 
 
 class Dependent(base.BaseScheduler):
 
     compare_attrs = ('upstream_name',)
 
-    def __init__(self, name, upstream, builderNames, properties={}, **kwargs):
-        base.BaseScheduler.__init__(self, name, builderNames, properties,
-                                    **kwargs)
+    def __init__(self, name, upstream, builderNames, **kwargs):
+        base.BaseScheduler.__init__(self, name, builderNames, **kwargs)
         if not interfaces.IScheduler.providedBy(upstream):
             config.error(
                 "upstream must be another Scheduler instance")
         self.upstream_name = upstream.name
-        self._buildset_addition_subscr = None
-        self._buildset_completion_subscr = None
+        self._buildset_new_consumer = None
+        self._buildset_complete_consumer = None
         self._cached_upstream_bsids = None
 
         # the subscription lock makes sure that we're done inserting a
-        # subcription into the DB before registering that the buildset is
+        # subscription into the DB before registering that the buildset is
         # complete.
         self._subscription_lock = defer.DeferredLock()
 
-    def startService(self):
-        self._buildset_addition_subscr = \
-            self.master.subscribeToBuildsets(self._buildsetAdded)
-        self._buildset_completion_subscr = \
-            self.master.subscribeToBuildsetCompletions(self._buildsetCompleted)
+    @defer.inlineCallbacks
+    def activate(self):
+        yield base.BaseScheduler.deactivate(self)
+
+        if not self.enabled:
+            return
+
+        self._buildset_new_consumer = yield self.master.mq.startConsuming(
+            self._buildset_new_cb,
+            ('buildsets', None, 'new'))
+        # TODO: refactor to subscribe only to interesting buildsets, and
+        # subscribe to them directly, via the data API
+        self._buildset_complete_consumer = yield self.master.mq.startConsuming(
+            self._buildset_complete_cb,
+            ('buildsets', None, 'complete'))
 
         # check for any buildsets completed before we started
-        d = self._checkCompletedBuildsets(None, None)
-        d.addErrback(log.err, 'while checking for completed buildsets in start')
+        yield self._checkCompletedBuildsets(None, )
 
-    def stopService(self):
-        if self._buildset_addition_subscr:
-            self._buildset_addition_subscr.unsubscribe()
-        if self._buildset_completion_subscr:
-            self._buildset_completion_subscr.unsubscribe()
+    @defer.inlineCallbacks
+    def deactivate(self):
+        # the base deactivate will unsubscribe from new changes
+        yield base.BaseScheduler.deactivate(self)
+
+        if not self.enabled:
+            return
+
+        if self._buildset_new_consumer:
+            self._buildset_new_consumer.stopConsuming()
+        if self._buildset_complete_consumer:
+            self._buildset_complete_consumer.stopConsuming()
         self._cached_upstream_bsids = None
-        return defer.succeed(None)
 
     @util.deferredLocked('_subscription_lock')
-    def _buildsetAdded(self, bsid=None, properties=None, **kwargs):
-        # check if this was submitetted by our upstream by checking the
-        # scheduler property
-        submitter = properties.get('scheduler', (None, None))[0]
-        if submitter != self.upstream_name:
+    def _buildset_new_cb(self, key, msg):
+        # check if this was submitted by our upstream
+        if msg['scheduler'] != self.upstream_name:
             return
 
         # record our interest in this buildset
-        d = self._addUpstreamBuildset(bsid)
-        d.addErrback(log.err, 'while subscribing to buildset %d' % bsid)
+        return self._addUpstreamBuildset(msg['bsid'])
 
-    def _buildsetCompleted(self, bsid, result):
-        d = self._checkCompletedBuildsets(bsid, result)
-        d.addErrback(log.err, 'while checking for completed buildsets')
+    def _buildset_complete_cb(self, key, msg):
+        return self._checkCompletedBuildsets(msg['bsid'])
 
     @util.deferredLocked('_subscription_lock')
     @defer.inlineCallbacks
-    def _checkCompletedBuildsets(self, bsid, result):
+    def _checkCompletedBuildsets(self, bsid):
         subs = yield self._getUpstreamBuildsets()
 
         sub_bsids = []
-        for (sub_bsid, sub_sssetid, sub_complete, sub_results) in subs:
+        for (sub_bsid, sub_ssids, sub_complete, sub_results) in subs:
             # skip incomplete builds, handling the case where the 'complete'
             # column has not been updated yet
             if not sub_complete and sub_bsid != bsid:
                 continue
 
-            # build a dependent build if the status is appropriate
+            # build a dependent build if the status is appropriate.  Note that
+            # this uses the sourcestamps from the buildset, not from any of the
+            # builds performed to complete the buildset (since those might
+            # differ from one another)
             if sub_results in (SUCCESS, WARNINGS):
-                yield self.addBuildsetForSourceStamp(setid=sub_sssetid,
-                                                     reason='downstream')
+                yield self.addBuildsetForSourceStamps(
+                    sourcestamps=[ssid for ssid in sub_ssids],
+                    reason=u'downstream')
 
             sub_bsids.append(sub_bsid)
 
@@ -108,21 +125,21 @@ class Dependent(base.BaseScheduler):
 
     @defer.inlineCallbacks
     def _getUpstreamBuildsets(self):
-        # get a list of (bsid, sssid, complete, results) for all
+        # get a list of (bsid, ssids, complete, results) for all
         # upstream buildsets
         yield self._updateCachedUpstreamBuilds()
 
         changed = False
         rv = []
         for bsid in self._cached_upstream_bsids[:]:
-            bsdict = yield self.master.db.buildsets.getBuildset(bsid)
-            if not bsdict:
+            buildset = yield self.master.data.get(('buildsets', str(bsid)))
+            if not buildset:
                 self._cached_upstream_bsids.remove(bsid)
                 changed = True
                 continue
 
-            rv.append((bsid, bsdict['sourcestampsetid'], bsdict['complete'],
-                       bsdict['results']))
+            ssids = [ss['ssid'] for ss in buildset['sourcestamps']]
+            rv.append((bsid, ssids, buildset['complete'], buildset['results']))
 
         if changed:
             yield self.master.db.state.setState(self.objectid,

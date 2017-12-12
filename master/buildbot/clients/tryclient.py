@@ -13,12 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import print_function
 
-
+import json
 import os
 import random
 import re
+import shlex
+import string
 import sys
 import time
 
@@ -29,18 +32,26 @@ from twisted.internet import reactor
 from twisted.internet import task
 from twisted.internet import utils
 from twisted.python import log
+from twisted.python import runtime
 from twisted.python.procutils import which
 from twisted.spread import pb
 
-from buildbot.sourcestamp import SourceStamp
 from buildbot.status import builder
-from buildbot.util import json
 from buildbot.util import now
 from buildbot.util.eventual import fireEventually
 
 
+class SourceStamp(object):
+
+    def __init__(self, branch, revision, patch, repository=''):
+        self.branch = branch
+        self.revision = revision
+        self.patch = patch
+        self.repository = repository
+
+
 def output(*msg):
-    print ' '.join(map(str, msg))
+    log.msg(' '.join(map(str, msg)))
 
 
 class SourceStampExtractor:
@@ -68,7 +79,7 @@ class SourceStampExtractor:
     def _didvc(self, res, cmd):
         (stdout, stderr, code) = res
         # 'bzr diff' sets rc=1 if there were any differences.
-        # cvs does something similar, so don't bother requring rc=0.
+        # cvs does something similar, so don't bother requiring rc=0.
         return stdout
 
     def get(self):
@@ -152,13 +163,14 @@ class SVNExtractor(SourceStampExtractor):
         for line in res.split("\n"):
             m = re.search(r'^Status against revision:\s+(\d+)', line)
             if m:
-                self.baserev = int(m.group(1))
+                self.baserev = m.group(1)
                 return
-        output("Could not find 'Status against revision' in SVN output: %s" % res)
+        output(
+            "Could not find 'Status against revision' in SVN output: %s" % res)
         sys.exit(1)
 
     def getPatch(self, res):
-        d = self.dovc(["diff", "-r%d" % self.baserev])
+        d = self.dovc(["diff", "-r%s" % self.baserev])
         d.addCallback(self.readPatch, self.patchlevel)
         return d
 
@@ -208,14 +220,16 @@ class MercurialExtractor(SourceStampExtractor):
             output = yield self.dovc(["log", "--template", "{node}\\n", "-r",
                                       "max(::. - outgoing(%s))" % upstream])
         except RuntimeError:
-            # outgoing() will abort if no default-push/default path is configured
+            # outgoing() will abort if no default-push/default path is
+            # configured
             if upstream:
                 raise
             # fall back to current working directory parent
             output = yield self.dovc(["log", "--template", "{node}\\n", "-r", "p1()"])
         m = re.search(r'^(\w+)', output)
         if not m:
-            raise RuntimeError("Revision %r is not in the right format" % (output,))
+            raise RuntimeError(
+                "Revision %r is not in the right format" % (output,))
         self.baserev = m.group(0)
 
     def getPatch(self, res):
@@ -256,7 +270,7 @@ class PerforceExtractor(SourceStampExtractor):
         found = False
         for line in res.split("\n"):
             m = re.search('==== //depot/' + self.branch
-                          + r'/([\w\/\.\d\-\_]+)#(\d+) -', line)
+                          + r'/([\w/\.\d\-_]+)#(\d+) -', line)
             if m:
                 mpatch += "--- %s#%s\n" % (m.group(1), m.group(2))
                 mpatch += "+++ %s\n" % (m.group(1))
@@ -338,6 +352,8 @@ class GitExtractor(SourceStampExtractor):
         for l in res.split("\n"):
             if l.strip():
                 parts = l.strip().split("=", 2)
+                if len(parts) < 2:
+                    parts.append('true')
                 self.config[parts[0]] = parts[1]
         return self.config
 
@@ -347,9 +363,13 @@ class GitExtractor(SourceStampExtractor):
         ref = self.config.get("branch." + self.branch + ".merge")
         if remote and ref:
             remote_branch = ref.split("/", 2)[-1]
-            d = self.dovc(["rev-parse", remote + "/" + remote_branch])
-            d.addCallback(self.override_baserev)
-            return d
+            baserev = remote + "/" + remote_branch
+        else:
+            baserev = "master"
+
+        d = self.dovc(["rev-parse", baserev])
+        d.addCallback(self.override_baserev)
+        return d
 
     def override_baserev(self, res):
         self.baserev = res.strip()
@@ -370,7 +390,8 @@ class GitExtractor(SourceStampExtractor):
         sys.exit(1)
 
     def getPatch(self, res):
-        d = self.dovc(["diff", self.baserev])
+        d = self.dovc(["diff", "--src-prefix=a/", "--dst-prefix=b/",
+                       "--no-textconv", "--no-ext-diff", self.baserev])
         d.addCallback(self.readPatch, self.patchlevel)
         return d
 
@@ -441,7 +462,7 @@ def createJobfile(jobid, branch, baserev, patch_level, patch_body, repository,
         job += ns(branch)
         job += ns(str(baserev))
         job += ns("%d" % patch_level)
-        job += ns(patch_body)
+        job += ns(patch_body or "")
         job += ns(repository)
         job += ns(project)
         if (version >= 3):
@@ -577,8 +598,11 @@ class Try(pb.Referenceable):
 
     def _createJob_1(self, ss):
         self.sourcestamp = ss
+        patchlevel, diff = ss.patch
+        if diff is None:
+            raise RuntimeError("There is no patch to try, diff is empty.")
+
         if self.connect == "ssh":
-            patchlevel, diff = ss.patch
             revspec = ss.revision
             if revspec is None:
                 revspec = ""
@@ -604,15 +628,43 @@ class Try(pb.Referenceable):
         # returns a Deferred that fires when the job has been delivered
         if self.connect == "ssh":
             tryhost = self.getopt("host")
+            tryport = self.getopt("port")
             tryuser = self.getopt("username")
             trydir = self.getopt("jobdir")
             buildbotbin = self.getopt("buildbotbin")
-            if tryuser:
-                argv = ["ssh", "-l", tryuser, tryhost,
-                        buildbotbin, "tryserver", "--jobdir", trydir]
+            ssh_command = self.getopt("ssh")
+            if not ssh_command:
+                ssh_commands = which("ssh")
+                if not ssh_commands:
+                    raise RuntimeError("couldn't find ssh executable, make sure "
+                                       "it is available in the PATH")
+
+                argv = [ssh_commands[0]]
             else:
-                argv = ["ssh", tryhost,
-                        buildbotbin, "tryserver", "--jobdir", trydir]
+                # Split the string on whitespace to allow passing options in
+                # ssh command too, but preserving whitespace inside quotes to
+                # allow using paths with spaces in them which is common under
+                # Windows. And because Windows uses backslashes in paths, we
+                # can't just use shlex.split there as it would interpret them
+                # specially, so do it by hand.
+                if runtime.platformType == 'win32':
+                    # Note that regex here matches the arguments, not the
+                    # separators, as it's simpler to do it like this. And then we
+                    # just need to get all of them together using the slice and
+                    # also remove the quotes from those that were quoted.
+                    argv = [string.strip(a, '"') for a in
+                            re.split(r'''([^" ]+|"[^"]+")''', ssh_command)[1::2]]
+                else:
+                    # Do use standard tokenization logic under POSIX.
+                    argv = shlex.split(ssh_command)
+
+            if tryuser:
+                argv += ["-l", tryuser]
+
+            if tryport:
+                argv += ["-p", tryport]
+
+            argv += [tryhost, buildbotbin, "tryserver", "--jobdir", trydir]
             pp = RemoteTryPP(self.jobfile)
             reactor.spawnProcess(pp, argv[0], argv, os.environ)
             d = pp.d

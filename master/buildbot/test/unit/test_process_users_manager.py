@@ -13,16 +13,20 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
-from buildbot import config
-from buildbot.process.users import manager
-from buildbot.process.users import manual
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot import config
+from buildbot.process.users import manager
+from buildbot.util import service
 
-class FakeUserManager(manual.UsersBase):
+
+class FakeUserManager(service.AsyncMultiService):
     pass
 
 
@@ -39,18 +43,18 @@ class TestUserManager(unittest.TestCase):
         self.umm.stopService()
 
     @defer.inlineCallbacks
-    def test_reconfigService(self):
+    def test_reconfigServiceWithBuildbotConfig(self):
         # add a user manager
         um1 = FakeUserManager()
         self.config.user_managers = [um1]
 
-        yield self.umm.reconfigService(self.config)
+        yield self.umm.reconfigServiceWithBuildbotConfig(self.config)
 
         self.assertTrue(um1.running)
         self.assertIdentical(um1.master, self.master)
 
         # and back to nothing
         self.config.user_managers = []
-        yield self.umm.reconfigService(self.config)
+        yield self.umm.reconfigServiceWithBuildbotConfig(self.config)
 
         self.assertIdentical(um1.master, None)

@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 
 class Domain(object):
 
@@ -48,7 +51,7 @@ class Connection(object):
         return d
 
     def listDomainsID(self):
-        return self.domains.keys()
+        return list(self.domains)
 
     def lookupByName(self, name):
         return self.domains[name]

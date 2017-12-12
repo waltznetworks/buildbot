@@ -2,7 +2,7 @@ Configuring Buildbot
 ====================
 
 The buildbot's behavior is defined by the *config file*, which normally lives in the :file:`master.cfg` file in the buildmaster's base directory (but this can be changed with an option to the :command:`buildbot create-master` command).
-This file completely specifies which :class:`Builder`\s are to be run, which slaves they should use, how :class:`Change`\s should be tracked, and where the status information is to be sent.
+This file completely specifies which :class:`Builder`\s are to be run, which workers they should use, how :class:`Change`\s should be tracked, and where the status information is to be sent.
 The buildmaster's :file:`buildbot.tac` file names the base directory; everything else comes from the config file.
 
 A sample config file was installed for you when you created the buildmaster, but you will need to edit it before your buildbot will do anything useful.
@@ -41,7 +41,7 @@ For the configurations described in this section, a detailed knowledge of Python
 Python comments start with a hash character ``#``, tuples are defined with ``(parenthesis, pairs)``, and lists (arrays) are defined with ``[square, brackets]``.
 Tuples and lists are mostly interchangeable.
 Dictionaries (data structures which map *keys* to *values*) are defined with curly braces: ``{'key1': value1, 'key2': value2}``.
-Function calls (and object instantiation) can use named parameters, like ``w = html.Waterfall(http_port=8010)``.
+Function calls (and object instantiation) can use named parameters, like ``steps.ShellCommand(command=["trial", "hello"])``.
 
 The config file starts with a series of ``import`` statements, which make various kinds of :class:`Step`\s and :class:`Status` targets available for later use.
 The main ``BuildmasterConfig`` dictionary is created, then it is populated with a variety of keys, described section-by-section in subsequent chapters.
@@ -56,7 +56,8 @@ The following symbols are automatically available for use in the configuration f
 ``basedir``
     the base directory for the buildmaster.
     This string has not been expanded, so it may start with a tilde.
-    It needs to be expanded before use. The config file is located in::
+    It needs to be expanded before use.
+    The config file is located in::
 
         os.path.expanduser(os.path.join(basedir, 'master.cfg'))
 
@@ -95,9 +96,9 @@ If you have errors in your configuration file, checkconfig will let you know:
 
     % buildbot checkconfig master.cfg
     Configuration Errors:
-    c['slaves'] must be a list of BuildSlave instances
-    no slaves are configured
-    builder 'smoketest' uses unknown slaves 'linux-002'
+    c['workers'] must be a list of Worker instances
+    no workers are configured
+    builder 'smoketest' uses unknown workers 'linux-002'
 
 If the config file is simply broken, that will be caught too:
 
@@ -166,8 +167,3 @@ Any previously queued :class:`Build`\s (or :class:`Build`\s which get queued aft
      This occurs most commonly when a callable is passed as a configuration parameter.
 
    The bbproto project (at https://github.com/dabrahams/bbproto) may help to construct large (multi-file) configurations which can be effectively reloaded and reconfigured.
-
-Reconfig by Debug Client
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-The :bb:cmdline:`debug tool <debugclient>` (:samp:`buildbot debugclient --master {HOST}:{PORT}`) has a :guilabel:`Reload .cfg` button which will also trigger a reload.

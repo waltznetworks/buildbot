@@ -13,13 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import iteritems
+
 from twisted.internet import defer
 from twisted.internet import utils
 
 
 class Expect(object):
-    _stdout = ""
-    _stderr = ""
+    _stdout = b""
+    _stderr = b""
     _exit = 0
     _path = None
 
@@ -28,10 +32,12 @@ class Expect(object):
         self._args = args
 
     def stdout(self, stdout):
+        assert(isinstance(stdout, bytes))
         self._stdout = stdout
         return self
 
     def stderr(self, stderr):
+        assert(isinstance(stderr, bytes))
         self._stderr = stderr
         return self
 
@@ -44,10 +50,9 @@ class Expect(object):
         return self
 
     def check(self, test, bin, path, args):
-        test.assertEqual(
+        test.assertDictEqual(
             dict(bin=bin, path=path, args=tuple(args)),
-            dict(bin=self._bin, path=self._path, args=self._args),
-            "unexpected command run")
+            dict(bin=self._bin, path=self._path, args=self._args), "unexpected command run")
         return (self._stdout, self._stderr, self._exit)
 
     def __repr__(self):
@@ -55,6 +60,7 @@ class Expect(object):
 
 
 class GetProcessOutputMixin:
+    longMessage = True
 
     def setUpGetProcessOutput(self):
         self._gpo_patched = False
@@ -67,7 +73,7 @@ class GetProcessOutputMixin:
 
     def _check_env(self, env):
         env = env or {}
-        for var, value in self._gpo_expect_env.items():
+        for var, value in iteritems(self._gpo_expect_env):
             self.assertEqual(env.get(var), value,
                              'Expected environment to have %s = %r' % (var, value))
 
@@ -81,11 +87,9 @@ class GetProcessOutputMixin:
             stdout, stderr, exit = res
             if errortoo:
                 return defer.succeed(stdout + stderr)
-            else:
-                if stderr:
-                    return defer.fail(IOError("got stderr: %r" % (stderr,)))
-                else:
-                    return defer.succeed(stdout)
+            if stderr:
+                return defer.fail(IOError("got stderr: %r" % (stderr,)))
+            return defer.succeed(stdout)
         return d
 
     def patched_getProcessOutputAndValue(self, bin, args, env=None,

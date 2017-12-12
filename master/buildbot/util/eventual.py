@@ -12,9 +12,11 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-
+#
 # copied from foolscap
+
+from __future__ import absolute_import
+from __future__ import print_function
 
 from twisted.internet import defer
 from twisted.internet import reactor
@@ -46,7 +48,7 @@ class _SimpleCallQueue(object):
         for cb, args, kwargs in events:
             try:
                 cb(*args, **kwargs)
-            except:
+            except Exception:
                 log.err()
         self._in_turn = False
         if self._events and not self._timer:

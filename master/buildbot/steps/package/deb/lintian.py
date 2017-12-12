@@ -17,11 +17,15 @@
 Steps and objects related to lintian
 """
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from buildbot import config
 from buildbot.process import buildstep
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from buildbot.status.results import WARNINGS
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
+from buildbot.process.results import WARNINGS
+from buildbot.steps.package import util as pkgutil
 from buildbot.steps.shell import ShellCommand
 
 
@@ -76,25 +80,23 @@ class DebLintian(ShellCommand):
             for tag in self.suppressTags:
                 self.command += ['--suppress-tags', tag]
 
+        self.obs = pkgutil.WEObserver()
+        self.addLogObserver('stdio', self.obs)
+
     def createSummary(self, log):
         """
         Create nice summary logs.
 
         @param log: log to create summary off of.
         """
-        warnings = []
-        errors = []
-        for line in log.readlines():
-            if 'W: ' in line:
-                warnings.append(line)
-            elif 'E: ' in line:
-                errors.append(line)
+        warnings = self.obs.warnings
+        errors = self.obs.errors
 
         if warnings:
-            self.addCompleteLog('%d Warnings' % len(warnings), "".join(warnings))
+            self.addCompleteLog('%d Warnings' % len(warnings), "\n".join(warnings))
             self.warnCount = len(warnings)
         if errors:
-            self.addCompleteLog('%d Errors' % len(errors), "".join(errors))
+            self.addCompleteLog('%d Errors' % len(errors), "\n".join(errors))
             self.errCount = len(errors)
 
     def evaluateCommand(self, cmd):

@@ -13,23 +13,26 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.moves.urllib.parse import unquote as urlunquote
+from future.moves.urllib.parse import urlparse
+from future.moves.urllib.parse import urlunparse
+
 import re
-import urllib
 import xml.dom.minidom
 import xml.parsers.expat
-
-from string import lower
-from urlparse import urlparse
-from urlparse import urlunparse
 
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.python import log
 
+from buildbot.compat import urlquote
 from buildbot.config import ConfigErrors
-from buildbot.interfaces import BuildSlaveTooOldError
 from buildbot.process import buildstep
+from buildbot.process import remotecommand
 from buildbot.steps.source.base import Source
+from buildbot.util import unicode2NativeString
 
 
 class SVN(Source):
@@ -38,8 +41,7 @@ class SVN(Source):
 
     name = 'svn'
 
-    renderables = ['repourl']
-    possible_modes = ('incremental', 'full')
+    renderables = ['repourl', 'password']
     possible_methods = ('clean', 'fresh', 'clobber', 'copy', 'export', None)
 
     def __init__(self, repourl=None, mode='incremental',
@@ -58,10 +60,12 @@ class SVN(Source):
         self.preferLastChangedRev = preferLastChangedRev
         Source.__init__(self, **kwargs)
         errors = []
-        if self.mode not in self.possible_modes:
-            errors.append("mode %s is not one of %s" % (self.mode, self.possible_modes))
+        if not self._hasAttrGroupMember('mode', self.mode):
+            errors.append("mode %s is not one of %s" %
+                          (self.mode, self._listAttrGroupMembers('mode')))
         if self.method not in self.possible_methods:
-            errors.append("method %s is not one of %s" % (self.method, self.possible_methods))
+            errors.append("method %s is not one of %s" %
+                          (self.method, self.possible_methods))
 
         if repourl is None:
             errors.append("you must provide repourl")
@@ -74,35 +78,33 @@ class SVN(Source):
         self.method = self._getMethod()
         self.stdio_log = self.addLogForRemoteCommands("stdio")
 
-        # if the version is new enough, and the password is set, then obfuscate it
+        # if the version is new enough, and the password is set, then obfuscate
+        # it
         if self.password is not None:
-            if not self.slaveVersionIsOlderThan('shell', '2.16'):
+            if not self.workerVersionIsOlderThan('shell', '2.16'):
                 self.password = ('obfuscated', self.password, 'XXXXXX')
             else:
-                log.msg("Slave does not understand obfuscation; "
+                log.msg("Worker does not understand obfuscation; "
                         "svn password will be logged")
 
         d = self.checkSvn()
 
+        @d.addCallback
         def checkInstall(svnInstalled):
             if not svnInstalled:
-                raise BuildSlaveTooOldError("SVN is not installed on slave")
+                raise buildstep.BuildStepFailed(
+                    "SVN is not installed on worker")
             return 0
-        d.addCallback(checkInstall)
 
         d.addCallback(lambda _: self.sourcedirIsPatched())
 
+        @d.addCallback
         def checkPatched(patched):
             if patched:
                 return self.purge(False)
-            else:
-                return 0
-        d.addCallback(checkPatched)
+            return 0
 
-        if self.mode == 'full':
-            d.addCallback(self.full)
-        elif self.mode == 'incremental':
-            d.addCallback(self.incremental)
+        d.addCallback(self._getAttrGroupMember('mode', self.mode))
 
         if patch:
             d.addCallback(self.patch, patch)
@@ -112,7 +114,7 @@ class SVN(Source):
         return d
 
     @defer.inlineCallbacks
-    def full(self, _):
+    def mode_full(self, _):
         if self.method == 'clobber':
             yield self.clobber()
             return
@@ -130,7 +132,7 @@ class SVN(Source):
             yield self.fresh()
 
     @defer.inlineCallbacks
-    def incremental(self, _):
+    def mode_incremental(self, _):
         updatable = yield self._sourcedirIsUpdatable()
 
         if not updatable:
@@ -144,7 +146,7 @@ class SVN(Source):
             yield self._dovccmd(command)
 
     def clobber(self):
-        d = self.runRmdir(self.workdir)
+        d = self.runRmdir(self.workdir, timeout=self.timeout)
         d.addCallback(lambda _: self._checkout())
         return d
 
@@ -166,23 +168,26 @@ class SVN(Source):
 
     @defer.inlineCallbacks
     def copy(self):
-        yield self.runRmdir(self.workdir)
+        yield self.runRmdir(self.workdir, timeout=self.timeout)
 
-        # temporarily set workdir = 'source' and do an incremental checkout
+        checkout_dir = 'source'
+        if self.codebase:
+            checkout_dir = self.build.path_module.join(
+                checkout_dir, self.codebase)
+        # temporarily set workdir = checkout_dir and do an incremental checkout
         try:
             old_workdir = self.workdir
-            self.workdir = 'source'
-            yield self.incremental(None)
-        except:  # finally doesn't work in python-2.4
+            self.workdir = checkout_dir
+            yield self.mode_incremental(None)
+        finally:
             self.workdir = old_workdir
-            raise
         self.workdir = old_workdir
 
         # if we're copying, copy; otherwise, export from source to build
         if self.method == 'copy':
-            cmd = buildstep.RemoteCommand('cpdir',
-                                          {'fromdir': 'source', 'todir': self.workdir,
-                                           'logEnviron': self.logEnviron})
+            cmd = remotecommand.RemoteCommand('cpdir',
+                                              {'fromdir': checkout_dir, 'todir': self.workdir,
+                                               'logEnviron': self.logEnviron})
         else:
             export_cmd = ['svn', 'export']
             if self.revision:
@@ -193,10 +198,11 @@ class SVN(Source):
                 export_cmd.extend(['--password', self.password])
             if self.extra_args:
                 export_cmd.extend(self.extra_args)
-            export_cmd.extend(['source', self.workdir])
+            export_cmd.extend([checkout_dir, self.workdir])
 
-            cmd = buildstep.RemoteShellCommand('', export_cmd,
-                                               env=self.env, logEnviron=self.logEnviron, timeout=self.timeout)
+            cmd = remotecommand.RemoteShellCommand('', export_cmd,
+                                                   env=self.env, logEnviron=self.logEnviron,
+                                                   timeout=self.timeout)
         cmd.useLog(self.stdio_log, False)
 
         yield self.runCommand(cmd)
@@ -207,10 +213,10 @@ class SVN(Source):
     def finish(self, res):
         d = defer.succeed(res)
 
+        @d.addCallback
         def _gotResults(results):
             self.setStatus(self.cmd, results)
             return results
-        d.addCallback(_gotResults)
         d.addCallback(self.finished)
         return d
 
@@ -226,16 +232,17 @@ class SVN(Source):
         if self.extra_args:
             command.extend(self.extra_args)
 
-        cmd = buildstep.RemoteShellCommand(self.workdir, ['svn'] + command,
-                                           env=self.env,
-                                           logEnviron=self.logEnviron,
-                                           timeout=self.timeout,
-                                           collectStdout=collectStdout,
-                                           collectStderr=collectStderr)
+        cmd = remotecommand.RemoteShellCommand(self.workdir, ['svn'] + command,
+                                               env=self.env,
+                                               logEnviron=self.logEnviron,
+                                               timeout=self.timeout,
+                                               collectStdout=collectStdout,
+                                               collectStderr=collectStderr)
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
 
-        def evaluateCommand(cmd):
+        @d.addCallback
+        def evaluateCommand(_):
             if cmd.didFail() and abandonOnFailure:
                 log.msg("Source step failed while running command %s" % cmd)
                 raise buildstep.BuildStepFailed()
@@ -245,9 +252,7 @@ class SVN(Source):
                 return cmd.stdout
             elif collectStderr:
                 return cmd.stderr
-            else:
-                return cmd.rc
-        d.addCallback(lambda _: evaluateCommand(cmd))
+            return cmd.rc
         return d
 
     def _getMethod(self):
@@ -267,21 +272,25 @@ class SVN(Source):
             return
 
         # then run 'svn info --xml' to check that the URL matches our repourl
-        stdout, stderr = yield self._dovccmd(['info', '--xml'], collectStdout=True, collectStderr=True, abandonOnFailure=False)
+        stdout, stderr = yield self._dovccmd(['info', '--xml'], collectStdout=True,
+                                             collectStderr=True, abandonOnFailure=False)
 
-        # svn: E155037: Previous operation has not finished; run 'cleanup' if it was interrupted
+        # svn: E155037: Previous operation has not finished; run 'cleanup' if
+        # it was interrupted
         if 'E155037:' in stderr:
             defer.returnValue(False)
             return
 
         try:
             stdout_xml = xml.dom.minidom.parseString(stdout)
-            extractedurl = stdout_xml.getElementsByTagName('url')[0].firstChild.nodeValue
+            extractedurl = stdout_xml.getElementsByTagName(
+                'url')[0].firstChild.nodeValue
         except xml.parsers.expat.ExpatError:
             msg = "Corrupted xml, aborting step"
             self.stdio_log.addHeader(msg)
             raise buildstep.BuildStepFailed()
-        defer.returnValue(extractedurl == self.svnUriCanonicalize(self.repourl))
+        defer.returnValue(
+            extractedurl == self.svnUriCanonicalize(self.repourl))
         return
 
     @defer.inlineCallbacks
@@ -291,11 +300,11 @@ class SVN(Source):
         svnversion_dir = self.workdir
         if self.mode == 'full' and self.method == 'export':
             svnversion_dir = 'source'
-        cmd = buildstep.RemoteShellCommand(svnversion_dir, ['svn', 'info', '--xml'],
-                                           env=self.env,
-                                           logEnviron=self.logEnviron,
-                                           timeout=self.timeout,
-                                           collectStdout=True)
+        cmd = remotecommand.RemoteShellCommand(svnversion_dir, ['svn', 'info', '--xml'],
+                                               env=self.env,
+                                               logEnviron=self.logEnviron,
+                                               timeout=self.timeout,
+                                               collectStdout=True)
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
@@ -310,7 +319,8 @@ class SVN(Source):
         revision = None
         if self.preferLastChangedRev:
             try:
-                revision = stdout_xml.getElementsByTagName('commit')[0].attributes['revision'].value
+                revision = stdout_xml.getElementsByTagName(
+                    'commit')[0].attributes['revision'].value
             except (KeyError, IndexError):
                 msg = ("SVN.parseGotRevision unable to detect Last Changed Rev in"
                        " output of svn info")
@@ -319,7 +329,8 @@ class SVN(Source):
 
         if revision is None:
             try:
-                revision = stdout_xml.getElementsByTagName('entry')[0].attributes['revision'].value
+                revision = stdout_xml.getElementsByTagName(
+                    'entry')[0].attributes['revision'].value
             except (KeyError, IndexError):
                 msg = ("SVN.parseGotRevision unable to detect revision in"
                        " output of svn info")
@@ -339,27 +350,27 @@ class SVN(Source):
             command.append('--no-ignore')
         d = self._dovccmd(command, collectStdout=True)
 
+        @d.addCallback
         def parseAndRemove(stdout):
             files = []
             for filename in self.getUnversionedFiles(stdout, self.keep_on_purge):
-                filename = self.workdir + '/' + str(filename)
+                filename = unicode2NativeString(self.build.path_module.join(self.workdir, filename))
                 files.append(filename)
-            if len(files) == 0:
+            if not files:
                 d = defer.succeed(0)
             else:
-                if self.slaveVersionIsOlderThan('rmdir', '2.14'):
+                if self.workerVersionIsOlderThan('rmdir', '2.14'):
                     d = self.removeFiles(files)
                 else:
-                    d = self.runRmdir(files, abandonOnFailure=False)
+                    d = self.runRmdir(files, abandonOnFailure=False, timeout=self.timeout)
             return d
-        d.addCallback(parseAndRemove)
 
+        @d.addCallback
         def evaluateCommand(rc):
             if rc != 0:
                 log.msg("Failed removing files")
                 raise buildstep.BuildStepFailed()
             return rc
-        d.addCallback(evaluateCommand)
         return d
 
     @staticmethod
@@ -384,25 +395,23 @@ class SVN(Source):
     @defer.inlineCallbacks
     def removeFiles(self, files):
         for filename in files:
-            res = yield self.runRmdir(filename, abandonOnFailure=False)
+            res = yield self.runRmdir(filename, abandonOnFailure=False, timeout=self.timeout)
             if res:
                 defer.returnValue(res)
                 return
         defer.returnValue(0)
 
     def checkSvn(self):
-        cmd = buildstep.RemoteShellCommand(self.workdir, ['svn', '--version'],
-                                           env=self.env,
-                                           logEnviron=self.logEnviron,
-                                           timeout=self.timeout)
+        cmd = remotecommand.RemoteShellCommand(self.workdir, ['svn', '--version'],
+                                               env=self.env,
+                                               logEnviron=self.logEnviron,
+                                               timeout=self.timeout)
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
 
-        def evaluate(cmd):
-            if cmd.rc != 0:
-                return False
-            return True
-        d.addCallback(lambda _: evaluate(cmd))
+        @d.addCallback
+        def evaluate(_):
+            return cmd.rc == 0
         return d
 
     def computeSourceRevision(self, changes):
@@ -414,24 +423,29 @@ class SVN(Source):
     @staticmethod
     def svnUriCanonicalize(uri):
         collapse = re.compile(r'([^/]+/\.\./?|/\./|//|/\.$|/\.\.$|^/\.\.)')
-        server_authority = re.compile(r'^(?:([^\@]+)\@)?([^\:]+)(?:\:(.+))?$')
+        server_authority = re.compile(r'^(?:([^@]+)@)?([^:]+)(?::(.+))?$')
         default_port = {'http': '80',
                         'https': '443',
                         'svn': '3690'}
 
         relative_schemes = ['http', 'https', 'svn']
-        quote = lambda uri: urllib.quote(uri, "!$&'()*+,-./:=@_~")
 
-        if len(uri) == 0 or uri == '/':
+        def quote(uri):
+            return urlquote(uri, "!$&'()*+,-./:=@_~", encoding="latin-1")
+
+        if not uri or uri == '/':
             return uri
 
         (scheme, authority, path, parameters, query, fragment) = urlparse(uri)
-        scheme = lower(scheme)
+        scheme = scheme.lower()
         if authority:
-            userinfo, host, port = server_authority.match(authority).groups()
+            mo = server_authority.match(authority)
+            if not mo:
+                return uri  # give up
+            userinfo, host, port = mo.groups()
             if host[-1] == '.':
                 host = host[:-1]
-            authority = lower(host)
+            authority = host.lower()
             if userinfo:
                 authority = "%s@%s" % (userinfo, authority)
             if port and port != default_port.get(scheme, None):
@@ -445,14 +459,14 @@ class SVN(Source):
                     break
                 last_path = path
 
-        path = quote(urllib.unquote(path))
-        canonical_uri = urlunparse((scheme, authority, path, parameters, query, fragment))
+        path = quote(urlunquote(path))
+        canonical_uri = urlunparse(
+            (scheme, authority, path, parameters, query, fragment))
         if canonical_uri == '/':
             return canonical_uri
         elif canonical_uri[-1] == '/' and canonical_uri[-2] != '/':
             return canonical_uri[:-1]
-        else:
-            return canonical_uri
+        return canonical_uri
 
     def _checkout(self):
         checkout_cmd = ['checkout', self.repourl, '.']
@@ -473,7 +487,7 @@ class SVN(Source):
                         % (repeats, delay))
                 self.retry = (delay, repeats - 1)
                 df = defer.Deferred()
-                df.addCallback(lambda _: self.runRmdir(self.workdir))
+                df.addCallback(lambda _: self.runRmdir(self.workdir, timeout=self.timeout))
                 df.addCallback(lambda _: self._checkout())
                 reactor.callLater(delay, df.callback, None)
                 return df

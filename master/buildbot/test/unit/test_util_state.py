@@ -13,9 +13,13 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.trial import unittest
+
 from buildbot.test.fake.fakemaster import make_master
 from buildbot.util import state
-from twisted.trial import unittest
 
 
 class FakeObject(state.StateMixin):
@@ -38,17 +42,17 @@ class TestStateMixin(unittest.TestCase):
                                        fav_color=['red', 'purple'])
         d = self.object.getState('fav_color')
 
+        @d.addCallback
         def check(res):
             self.assertEqual(res, ['red', 'purple'])
-        d.addCallback(check)
         return d
 
     def test_getState_default(self):
         d = self.object.getState('fav_color', 'black')
 
+        @d.addCallback
         def check(res):
             self.assertEqual(res, 'black')
-        d.addCallback(check)
         return d
 
     def test_getState_KeyError(self):
@@ -68,18 +72,18 @@ class TestStateMixin(unittest.TestCase):
     def test_setState(self):
         d = self.object.setState('y', 14)
 
+        @d.addCallback
         def check(_):
             self.master.db.state.assertStateByClass('fake-name', 'FakeObject',
                                                     y=14)
-        d.addCallback(check)
         return d
 
     def test_setState_existing(self):
         self.master.db.state.fakeState('fake-name', 'FakeObject', x=13)
         d = self.object.setState('x', 14)
 
+        @d.addCallback
         def check(_):
             self.master.db.state.assertStateByClass('fake-name', 'FakeObject',
                                                     x=14)
-        d.addCallback(check)
         return d

@@ -13,74 +13,21 @@
 #
 # Copyright Buildbot Team Members
 
-import sqlalchemy as sa
+# This module is left for backward compatibility of old-named worker API.
+# It should never be imported by Buildbot.
 
-from buildbot.db import base
+from __future__ import absolute_import
+from __future__ import print_function
+
+from buildbot.db.workers import WorkersConnectorComponent as _WorkersConnectorComponent
+from buildbot.worker_transition import deprecatedWorkerModuleAttribute
+from buildbot.worker_transition import reportDeprecatedWorkerModuleUsage
+
+reportDeprecatedWorkerModuleUsage(
+    "'{old}' module is deprecated, use "
+    "'buildbot.db.worker' module instead".format(old=__name__))
 
 
-class BuildslavesConnectorComponent(base.DBConnectorComponent):
-    # Documentation is in developer/database.rst
-
-    def getBuildslaves(self):
-        def thd(conn):
-            tbl = self.db.model.buildslaves
-            rows = conn.execute(tbl.select()).fetchall()
-
-            dicts = []
-            if rows:
-                for row in rows:
-                    dicts.append({
-                        'slaveid': row.id,
-                        'name': row.name
-                    })
-            return dicts
-        d = self.db.pool.do(thd)
-        return d
-
-    def getBuildslaveByName(self, name):
-        def thd(conn):
-            tbl = self.db.model.buildslaves
-            res = conn.execute(tbl.select(whereclause=(tbl.c.name == name)))
-            row = res.fetchone()
-
-            rv = None
-            if row:
-                rv = self._bdictFromRow(row)
-            res.close()
-            return rv
-        return self.db.pool.do(thd)
-
-    def updateBuildslave(self, name, slaveinfo, _race_hook=None):
-        def thd(conn):
-            transaction = conn.begin()
-
-            tbl = self.db.model.buildslaves
-
-            # first try update, then try insert
-            q = tbl.update(whereclause=(tbl.c.name == name))
-            res = conn.execute(q, info=slaveinfo)
-
-            if res.rowcount == 0:
-                _race_hook and _race_hook(conn)
-
-                # the update hit 0 rows, so try inserting a new one
-                try:
-                    q = tbl.insert()
-                    res = conn.execute(q,
-                                       name=name,
-                                       info=slaveinfo)
-                except (sa.exc.IntegrityError, sa.exc.ProgrammingError):
-                    # someone else beat us to the punch inserting this row;
-                    # let them win.
-                    transaction.rollback()
-                    return
-
-            transaction.commit()
-        return self.db.pool.do(thd)
-
-    def _bdictFromRow(self, row):
-        return {
-            'slaveid': row.id,
-            'name': row.name,
-            'slaveinfo': row.info
-        }
+deprecatedWorkerModuleAttribute(locals(), _WorkersConnectorComponent,
+                                compat_name="BuildslavesConnectorComponent",
+                                new_name="WorkersConnectorComponent")

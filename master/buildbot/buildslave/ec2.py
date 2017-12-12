@@ -11,23 +11,22 @@
 # this program; if not, write to the Free Software Foundation, Inc., 51
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# Portions Copyright Buildbot Team Members
+# Copyright Buildbot Team Members
 
-from __future__ import with_statement
-# Portions Copyright Canonical Ltd. 2009
+# This module is left for backward compatibility of old-named worker API.
+# It should never be imported by Buildbot.
 
-"""A LatentSlave that uses EC2 to instantiate the slaves on demand.
+from __future__ import absolute_import
+from __future__ import print_function
 
-Tested with Python boto 1.5c
-"""
+from buildbot.worker.ec2 import EC2LatentWorker as _EC2LatentWorker
+from buildbot.worker_transition import deprecatedWorkerModuleAttribute
+from buildbot.worker_transition import reportDeprecatedWorkerModuleUsage
 
-import os
-import re
-import time
+reportDeprecatedWorkerModuleUsage(
+    "'{old}' module is deprecated, use "
+    "'buildbot.worker.ec2' module instead".format(old=__name__))
 
-import boto
-import boto.ec2
-import boto.exception
 
 from twisted.internet import defer
 from twisted.internet import threads

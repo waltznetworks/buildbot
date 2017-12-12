@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
 from twisted.internet import defer
@@ -39,6 +42,9 @@ class PBManagerMixin:
 
     def assertNotRegistered(self):
         self.assertEqual(self.registrations, [])
+
+    def assertNotUnregistered(self):
+        self.assertEqual(self.unregistrations, [])
 
     def assertRegistered(self, portstr, username, password):
         for ps, un, pw in self.registrations:

@@ -5,13 +5,17 @@
 # Pyflakes warnings corrected
 
 # -*- coding: utf-8 -*-
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from future.builtins import range
 
 import re
-
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
 from time import mktime
 from time import time
+
+from dateutil.relativedelta import relativedelta
 
 search_re = re.compile(r'^([^-]+)-([^-/]+)(/(.*))?$')
 only_int_re = re.compile(r'^\d+$')
@@ -72,7 +76,7 @@ class croniter(object):
             e_list = expr.split(',')
             res = []
 
-            while len(e_list) > 0:
+            while e_list:
                 e = e_list.pop()
                 t = re.sub(r'^\*(/.+)$', r'%d-%d\1' % (self.RANGES[i][0],
                                                        self.RANGES[i][1]),
@@ -88,11 +92,12 @@ class croniter(object):
                     if not any_int_re.search(high):
                         high = self.ALPHACONV[i][high.lower()]
 
-                    if (not low or not high or int(low) > int(high)
-                            or not only_int_re.search(str(step))):
-                        raise ValueError("[%s] is not acceptable" % expr_format)
+                    if (not low or not high or int(low) > int(high) or
+                            not only_int_re.search(str(step))):
+                        raise ValueError(
+                            "[%s] is not acceptable" % expr_format)
 
-                    for j in xrange(int(low), int(high) + 1):
+                    for j in range(int(low), int(high) + 1):
                         if j % int(step) == 0:
                             e_list.append(j)
                 else:
@@ -101,7 +106,7 @@ class croniter(object):
 
                     try:
                         t = int(t)
-                    except:
+                    except (ValueError, TypeError):
                         pass
 
                     if t in self.LOWMAP[i]:
@@ -109,12 +114,14 @@ class croniter(object):
 
                     if t != '*' and (int(t) < self.RANGES[i][0] or
                                      int(t) > self.RANGES[i][1]):
-                        raise ValueError("[%s] is not acceptable, out of range" % expr_format)
+                        raise ValueError(
+                            "[%s] is not acceptable, out of range" % expr_format)
 
                     res.append(t)
 
             res.sort()
-            expanded.append(['*'] if (len(res) == 1 and res[0] == '*') else res)
+            expanded.append(
+                ['*'] if (len(res) == 1 and res[0] == '*') else res)
         self.expanded = expanded
 
     def get_next(self, ret_type=float):
@@ -158,10 +165,10 @@ class croniter(object):
             nearest_diff_method = self._get_next_nearest_diff
             sign = 1
 
-        offset = len(expanded) == 6 and 1 or 60
+        offset = 1 if len(expanded) == 6 else 60
         dst = now = datetime.fromtimestamp(now + sign * offset)
 
-        # BUILDBOT: ununsed 'day' omitted due to pyflakes warning
+        # BUILDBOT: unused 'day' omitted due to pyflakes warning
         month, year = dst.month, dst.year
         current_year = now.year
         DAYS = self.DAYS
@@ -196,18 +203,21 @@ class croniter(object):
                     if is_prev:
                         d += relativedelta(days=diff_day)
                     else:
-                        d += relativedelta(days=diff_day, hour=0, minute=0, second=0)
+                        d += relativedelta(days=diff_day,
+                                           hour=0, minute=0, second=0)
                     return True, d
             return False, d
 
         def proc_day_of_week(d):
             if expanded[4][0] != '*':
-                diff_day_of_week = nearest_diff_method(d.isoweekday() % 7, expanded[4], 7)
+                diff_day_of_week = nearest_diff_method(
+                    d.isoweekday() % 7, expanded[4], 7)
                 if diff_day_of_week is not None and diff_day_of_week != 0:
                     if is_prev:
                         d += relativedelta(days=diff_day_of_week)
                     else:
-                        d += relativedelta(days=diff_day_of_week, hour=0, minute=0, second=0)
+                        d += relativedelta(days=diff_day_of_week,
+                                           hour=0, minute=0, second=0)
                     return True, d
             return False, d
 
@@ -270,7 +280,7 @@ class croniter(object):
                 continue
             return mktime(dst.timetuple())
 
-        raise "failed to find prev date"
+        raise("failed to find prev date")
 
     def _get_next_nearest(self, x, to_check):
         small = [item for item in to_check if item < x]
@@ -301,14 +311,12 @@ class croniter(object):
         return (candidates[0]) - x - range_val
 
     def is_leap(self, year):
-        if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0):
-            return True
-        else:
-            return False
+        return year % 400 == 0 or (year % 4 == 0 and year % 100 != 0)
+
 
 if __name__ == '__main__':
 
     base = datetime(2010, 1, 25)
     itr = croniter('0 0 1 * *', base)
     n1 = itr.get_next(datetime)
-    print n1
+    print(n1)

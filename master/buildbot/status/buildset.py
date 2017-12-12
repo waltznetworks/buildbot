@@ -13,14 +13,19 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import interfaces
-from buildbot.status.buildrequest import BuildRequestStatus
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
-from zope.interface import implements
+from zope.interface import implementer
+
+from buildbot import interfaces
+from buildbot.data import resultspec
+from buildbot.status.buildrequest import BuildRequestStatus
 
 
+@implementer(interfaces.IBuildSetStatus)
 class BuildSetStatus:
-    implements(interfaces.IBuildSetStatus)
 
     def __init__(self, bsdict, status):
         self.id = bsdict['bsid']
@@ -45,22 +50,24 @@ class BuildSetStatus:
     def getBuilderNamesAndBuildRequests(self):
         # returns a Deferred; undocumented method that may be removed
         # without warning
-        d = self.master.db.buildrequests.getBuildRequests(bsid=self.id)
+        d = self.master.data.get(('buildrequests', ),
+                                 filters=[resultspec.Filter('buildsetid', 'eq', [self.id])])
 
+        @d.addCallback
         def get_objects(brdicts):
             return dict([
                 (brd['buildername'], BuildRequestStatus(brd['buildername'],
                                                         brd['brid'], self.status))
                 for brd in brdicts])
-        d.addCallback(get_objects)
         return d
 
     def getBuilderNames(self):
-        d = self.master.db.buildrequests.getBuildRequests(bsid=self.id)
+        d = self.master.data.get(('buildrequests', ),
+                                 filters=[resultspec.Filter('buildsetid', 'eq', [self.id])])
 
+        @d.addCallback
         def get_names(brdicts):
             return sorted([brd['buildername'] for brd in brdicts])
-        d.addCallback(get_names)
         return d
 
     def waitUntilFinished(self):
@@ -74,22 +81,28 @@ class BuildSetStatus:
 
 class BuildSetSummaryNotifierMixin:
 
-    _buildSetSubscription = None
+    _buildsetCompleteConsumer = None
 
     def summarySubscribe(self):
-        self._buildSetSubscription = self.master.subscribeToBuildsetCompletions(self._buildsetComplete)
+        startConsuming = self.master.mq.startConsuming
+        self._buildsetCompleteConsumer = yield startConsuming(
+            self._buildsetComplete,
+            ('buildsets', None, 'complete'))
 
     def summaryUnsubscribe(self):
-        if self._buildSetSubscription is not None:
-            self._buildSetSubscription.unsubscribe()
-            self._buildSetSubscription = None
+        if self._buildsetCompleteConsumer is not None:
+            self._buildsetCompleteConsumer.stopConsuming()
+            self._buildsetCompleteConsumer = None
 
     def sendBuildSetSummary(self, buildset, builds):
         raise NotImplementedError
 
     @defer.inlineCallbacks
-    def _buildsetComplete(self, bsid, result):
-        # first, just get the buildset and all build requests for our buildset id
+    def _buildsetComplete(self, key, msg):
+        bsid = msg['bsid']
+
+        # first, just get the buildset and all build requests for our buildset
+        # id
         dl = [self.master.db.buildsets.getBuildset(bsid=bsid),
               self.master.db.buildrequests.getBuildRequests(bsid=bsid)]
         (buildset, breqs) = yield defer.gatherResults(dl)
@@ -97,7 +110,8 @@ class BuildSetSummaryNotifierMixin:
         # next, get the bdictlist for each build request
         dl = []
         for breq in breqs:
-            d = self.master.db.builds.getBuildsForRequest(breq['brid'])
+            d = self.master.db.builds.getBuilds(
+                buildrequestid=breq['buildrequestid'])
             dl.append(d)
 
         buildinfo = yield defer.gatherResults(dl)

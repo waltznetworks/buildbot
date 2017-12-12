@@ -17,12 +17,15 @@
 
 # Many thanks to Dave Peticolas for contributing this module
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import text_type
+
 import datetime
-import dateutil
-import exceptions
 import os
-import os.path
 import re
+
+import dateutil.tz
 
 from twisted.internet import defer
 from twisted.internet import protocol
@@ -33,7 +36,7 @@ from twisted.python import log
 from buildbot import config
 from buildbot import util
 from buildbot.changes import base
-
+from buildbot.util import bytes2unicode
 
 debug_logging = False
 
@@ -59,13 +62,15 @@ class TicketLoginProtocol(protocol.ProcessProtocol):
     def connectionMade(self):
         if self.stdin:
             if debug_logging:
-                log.msg("P4Poller: entering password for %s: %s" % (self.p4base, self.stdin))
+                log.msg("P4Poller: entering password for %s: %s" %
+                        (self.p4base, self.stdin))
             self.transport.write(self.stdin)
         self.transport.closeStdin()
 
     def processEnded(self, reason):
         if debug_logging:
-            log.msg("P4Poller: login process finished for %s: %s" % (self.p4base, reason.value.exitCode))
+            log.msg("P4Poller: login process finished for %s: %s" %
+                    (self.p4base, reason.value.exitCode))
         self.deferred.callback(reason.value.exitCode)
 
     def outReceived(self, data):
@@ -96,8 +101,9 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
     """This source will poll a perforce repository for changes and submit
     them to the change master."""
 
-    compare_attrs = ["p4port", "p4user", "p4passwd", "p4base",
-                     "p4bin", "pollInterval", "pollAtLaunch"]
+    compare_attrs = ("p4port", "p4user", "p4passwd", "p4base",
+                     "p4bin", "pollInterval", "pollAtLaunch",
+                     "server_tz")
 
     env_vars = ["P4CLIENT", "P4PORT", "P4PASSWD", "P4USER",
                 "P4CHARSET", "PATH"]
@@ -125,13 +131,19 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
         if pollinterval != -2:
             pollInterval = pollinterval
 
-        base.PollingChangeSource.__init__(self, name=name, pollInterval=pollInterval, pollAtLaunch=pollAtLaunch)
+        if name is None:
+            name = "P4Source:%s:%s" % (p4port, p4base)
+
+        base.PollingChangeSource.__init__(self, name=name,
+                                          pollInterval=pollInterval,
+                                          pollAtLaunch=pollAtLaunch)
 
         if project is None:
             project = ''
 
         if use_tickets and not p4passwd:
-            config.error("You need to provide a P4 password to use ticket authentication")
+            config.error(
+                "You need to provide a P4 password to use ticket authentication")
 
         self.p4port = p4port
         self.p4user = p4user
@@ -140,10 +152,12 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
         self.p4bin = p4bin
         self.split_file = split_file
         self.encoding = encoding
-        self.project = project
+        self.project = util.ascii2unicode(project)
         self.use_tickets = use_tickets
         self.ticket_login_interval = ticket_login_interval
-        self.server_tz = server_tz
+        self.server_tz = dateutil.tz.gettz(server_tz) if server_tz else None
+        if server_tz is not None and self.server_tz is None:
+            raise P4PollerError("Failed to get timezone from server_tz string '{}'".format(server_tz))
 
         self._ticket_passwd = None
         self._ticket_login_counter = 0
@@ -153,11 +167,13 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
 
     def poll(self):
         d = self._poll()
-        d.addErrback(log.err, 'P4 poll failed on %s, %s' % (self.p4port, self.p4base))
+        d.addErrback(log.err, 'P4 poll failed on %s, %s' %
+                     (self.p4port, self.p4base))
         return d
 
     def _get_process_output(self, args):
-        env = dict([(e, os.environ.get(e)) for e in self.env_vars if os.environ.get(e)])
+        env = dict([(e, os.environ.get(e))
+                    for e in self.env_vars if os.environ.get(e)])
         d = utils.getProcessOutput(self.p4bin, args, env)
         return d
 
@@ -189,16 +205,22 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
             self._ticket_login_counter -= 1
             if self._ticket_login_counter <= 0:
                 # Re-acquire the ticket and reset the counter.
-                log.msg("P4Poller: (re)acquiring P4 ticket for %s..." % self.p4base)
-                protocol = TicketLoginProtocol(self.p4passwd + "\n", self.p4base)
+                log.msg("P4Poller: (re)acquiring P4 ticket for %s..." %
+                        self.p4base)
+                protocol = TicketLoginProtocol(
+                    self.p4passwd + "\n", self.p4base)
                 self._acquireTicket(protocol)
                 yield protocol.deferred
 
-                self._ticket_passwd = self._parseTicketPassword(protocol.stdout)
-                self._ticket_login_counter = max(self.ticket_login_interval / self.pollInterval, 1)
+                self._ticket_passwd = self._parseTicketPassword(
+                    protocol.stdout)
+                self._ticket_login_counter = max(
+                    self.ticket_login_interval / self.pollInterval, 1)
                 if debug_logging:
-                    log.msg("P4Poller: got ticket password: %s" % self._ticket_passwd)
-                    log.msg("P4Poller: next ticket acquisition in %d polls" % self._ticket_login_counter)
+                    log.msg("P4Poller: got ticket password: %s" %
+                            self._ticket_passwd)
+                    log.msg(
+                        "P4Poller: next ticket acquisition in %d polls" % self._ticket_login_counter)
 
         args = []
         if self.p4port:
@@ -209,11 +231,19 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
             args.extend(['-P', self._getPasswd()])
         args.extend(['changes'])
         if self.last_change is not None:
-            args.extend(['%s...@%d,now' % (self.p4base, self.last_change + 1)])
+            args.extend(
+                ['%s...@%d,#head' % (self.p4base, self.last_change + 1)])
         else:
             args.extend(['-m', '1', '%s...' % (self.p4base,)])
 
         result = yield self._get_process_output(args)
+        # decode the result from its designated encoding
+        try:
+            result = bytes2unicode(result, self.encoding)
+        except UnicodeError as ex:
+            log.msg(u"Warning: cannot fully decode {} in {}".format(
+                    repr(result), self.encoding))
+            result = bytes2unicode(result, encoding=self.encoding, errors="replace")
 
         last_change = self.last_change
         changelists = []
@@ -223,7 +253,8 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
                 continue
             m = self.changes_line_re.match(line)
             if not m:
-                raise P4PollerError("Unexpected 'p4 changes' output: %r" % result)
+                raise P4PollerError(
+                    "Unexpected 'p4 changes' output: %r" % result)
             num = int(m.group('num'))
             if last_change is None:
                 # first time through, the poller just gets a "baseline" for where to
@@ -248,11 +279,13 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
 
             # decode the result from its designated encoding
             try:
-                result = result.decode(self.encoding)
-            except exceptions.UnicodeError, ex:
-                log.msg("P4Poller: couldn't decode changelist description: %s" % ex.encoding)
+                result = bytes2unicode(result, self.encoding)
+            except UnicodeError as ex:
+                log.msg(
+                    "P4Poller: couldn't decode changelist description: %s" % ex.encoding)
                 log.msg("P4Poller: in object: %s" % ex.object)
-                log.err("P4Poller: poll failed on %s, %s" % (self.p4port, self.p4base))
+                log.err("P4Poller: poll failed on %s, %s" %
+                        (self.p4port, self.p4base))
                 raise
 
             lines = result.split('\n')
@@ -261,18 +294,26 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
             lines[0] = lines[0].rstrip()
             m = self.describe_header_re.match(lines[0])
             if not m:
-                raise P4PollerError("Unexpected 'p4 describe -s' result: %r" % result)
+                raise P4PollerError(
+                    "Unexpected 'p4 describe -s' result: %r" % result)
             who = m.group('who')
             when = datetime.datetime.strptime(m.group('when'), self.datefmt)
             if self.server_tz:
                 # Convert from the server's timezone to the local timezone.
                 when = when.replace(tzinfo=self.server_tz)
-                when = when.astimezone(dateutil.tz.tzlocal())
-            comments = ''
-            while not lines[0].startswith('Affected files'):
-                comments += lines.pop(0) + '\n'
-            lines.pop(0)  # affected files
+            when = util.datetime2epoch(when)
 
+            comment_lines = []
+            lines.pop(0)  # describe header
+            lines.pop(0)  # blank line
+            while not lines[0].startswith('Affected files'):
+                if lines[0].startswith('\t'):  # comment is indented by one tab
+                    comment_lines.append(lines.pop(0)[1:])
+                else:
+                    lines.pop(0)  # discard non comment line
+            comments = '\n'.join(comment_lines)
+
+            lines.pop(0)  # affected files
             branch_files = {}  # dict for branch mapped to file(s)
             while lines:
                 line = lines.pop(0).strip()
@@ -292,11 +333,11 @@ class P4Source(base.PollingChangeSource, util.ComparableMixin):
                         branch_files[branch] = [file]
 
             for branch in branch_files:
-                yield self.master.addChange(
+                yield self.master.data.updates.addChange(
                     author=who,
                     files=branch_files[branch],
                     comments=comments,
-                    revision=str(num),
+                    revision=text_type(num),
                     when_timestamp=when,
                     branch=branch,
                     project=self.project)

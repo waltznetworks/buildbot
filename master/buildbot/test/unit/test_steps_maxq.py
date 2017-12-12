@@ -13,13 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.trial import unittest
+
 from buildbot import config
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
 from buildbot.steps import maxq
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import steps
-from twisted.trial import unittest
 
 
 class TestShellCommandExecution(steps.BuildStepMixin, unittest.TestCase):
@@ -37,36 +41,33 @@ class TestShellCommandExecution(steps.BuildStepMixin, unittest.TestCase):
         self.setupStep(
             maxq.MaxQ(testdir='x'))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
-                        command="run_maxq.py x")
-            + ExpectShell.log('stdio', stdout='no failures\n')
-            + 0
+            ExpectShell(workdir='wkdir', command="run_maxq.py x") +
+            ExpectShell.log('stdio', stdout='no failures\n') +
+            0
         )
-        self.expectOutcome(result=SUCCESS, status_text=['maxq', 'tests'])
+        self.expectOutcome(result=SUCCESS, state_string='success')
         return self.runStep()
 
     def test_nonzero_rc_no_failures(self):
         self.setupStep(
             maxq.MaxQ(testdir='x'))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
-                        command="run_maxq.py x")
-            + ExpectShell.log('stdio', stdout='no failures\n')
-            + 2
+            ExpectShell(workdir='wkdir', command="run_maxq.py x") +
+            ExpectShell.log('stdio', stdout='no failures\n') +
+            2
         )
         self.expectOutcome(result=FAILURE,
-                           status_text=['1', 'maxq', 'failures'])
+                           state_string='1 maxq failures')
         return self.runStep()
 
     def test_failures(self):
         self.setupStep(
             maxq.MaxQ(testdir='x'))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
-                        command="run_maxq.py x")
-            + ExpectShell.log('stdio', stdout='\nTEST FAILURE: foo\n' * 10)
-            + 2
+            ExpectShell(workdir='wkdir', command="run_maxq.py x") +
+            ExpectShell.log('stdio', stdout='\nTEST FAILURE: foo\n' * 10) +
+            2
         )
         self.expectOutcome(result=FAILURE,
-                           status_text=['10', 'maxq', 'failures'])
+                           state_string='10 maxq failures')
         return self.runStep()

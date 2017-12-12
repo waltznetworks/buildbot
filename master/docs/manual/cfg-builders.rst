@@ -14,13 +14,12 @@ Builder Configuration
 The :bb:cfg:`builders` configuration key is a list of objects giving configuration for the Builders.
 For more information on the function of Builders in Buildbot, see :ref:`the Concepts chapter <Builder>`.
 The class definition for the builder configuration is in :file:`buildbot.config`.
-In the configuration file, its use looks like::
+However there is a much simpler way to use it, so in the configuration file, its use looks like::
 
     from buildbot.plugins import util
-
     c['builders'] = [
-        util.BuilderConfig(name='quick', slavenames=['bot1', 'bot2'], factory=f_quick),
-        util.BuilderConfig(name='thorough', slavename='bot1', factory=f_thorough),
+        util.BuilderConfig(name='quick', workernames=['bot1', 'bot2'], factory=f_quick),
+        util.BuilderConfig(name='thorough', workername='bot1', factory=f_thorough),
     ]
 
 ``BuilderConfig`` takes the following keyword arguments:
@@ -28,13 +27,13 @@ In the configuration file, its use looks like::
 ``name``
     This specifies the Builder's name, which is used in status reports.
 
-``slavename``
+``workername``
 
-``slavenames``
-    These arguments specify the buildslave or buildslaves that will be used by this Builder.
-    All slaves names must appear in the :bb:cfg:`slaves` configuration parameter.
-    Each buildslave can accommodate multiple builders.
-    The ``slavenames`` parameter can be a list of names, while ``slavename`` can specify only one slave.
+``workernames``
+    These arguments specify the worker or workers that will be used by this Builder.
+    All workers names must appear in the :bb:cfg:`workers` configuration parameter.
+    Each worker can accommodate multiple builders.
+    The ``workernames`` parameter can be a list of names, while ``workername`` can specify only one worker.
 
 ``factory``
     This is a :class:`buildbot.process.factory.BuildFactory` instance which controls how the build is performed by defining the steps in the build.
@@ -48,25 +47,25 @@ Other optional keys may be set on each ``BuilderConfig``:
     If not set, this parameter defaults to the builder name, with some characters escaped.
     Each builder must have a unique build directory.
 
-``slavebuilddir``
-    Specifies the name of a subdirectory (under the slave's configured base directory) in which everything related to this builder will be placed on the buildslave.
+``workerbuilddir``
+    Specifies the name of a subdirectory (under the worker's configured base directory) in which everything related to this builder will be placed on the worker.
     This is where checkouts, compiles, and tests are run.
     If not set, defaults to ``builddir``.
-    If a slave is connected to multiple builders that share the same ``slavebuilddir``, make sure the slave is set to run one build at a time or ensure this is fine to run multiple builds from the same directory simultaneously.
+    If a worker is connected to multiple builders that share the same ``workerbuilddir``, make sure the worker is set to run one build at a time or ensure this is fine to run multiple builds from the same directory simultaneously.
 
 ``tags``
     If provided, this is a list of strings that identifies tags for the builder.
     Status clients can limit themselves to a subset of the available tags.
-    A common use for this is to add new builders to your setup (for a new module, or for a new buildslave) that do not work correctly yet and allow you to integrate them with the active builders.
+    A common use for this is to add new builders to your setup (for a new module, or for a new worker) that do not work correctly yet and allow you to integrate them with the active builders.
     You can tag these new builders with a ``test`` tag, make your main status clients ignore them, and have only private status clients pick them up.
     As soon as they work, you can move them over to the active tag.
 
-``nextSlave``
-    If provided, this is a function that controls which slave will be assigned future jobs.
-    The function is passed two arguments, the :class:`Builder` object which is assigning a new job, and a list of :class:`SlaveBuilder` objects.
-    The function should return one of the :class:`SlaveBuilder` objects, or ``None`` if none of the available slaves should be used.
-    As an example, for each ``slave`` in the list, ``slave.slave`` will be a :class:`BuildSlave` object, and ``slave.slave.slavename`` is the slave's name.
-    The function can optionally return a Deferred, which should fire with the same results.
+``nextWorker``
+     If provided, this is a function that controls which worker will be assigned future jobs.
+     The function is passed three arguments, the :class:`Builder` object which is assigning a new job, a list of :class:`WorkerForBuilder` objects and the :class:`BuildRequest`.
+     The function should return one of the :class:`WorkerForBuilder` objects, or ``None`` if none of the available workers should be used.
+     As an example, for each ``worker`` in the list, ``worker.worker`` will be a :class:`Worker` object, and ``worker.worker.workername`` is the worker's name.
+     The function can optionally return a Deferred, which should fire with the same results.
 
 ``nextBuild``
     If provided, this is a function that controls which build request will be handled next.
@@ -75,21 +74,30 @@ Other optional keys may be set on each ``BuilderConfig``:
     This function can optionally return a Deferred which should fire with the same results.
 
 ``canStartBuild``
-    If provided, this is a function that can veto whether a particular buildslave should be used for a given build request.
-    The function is passed three arguments: the :class:`Builder`, a :class:`BuildSlave`, and a :class:`BuildRequest`.
+    If provided, this is a function that can veto whether a particular worker should be used for a given build request.
+    The function is passed three arguments: the :class:`Builder`, a :class:`Worker`, and a :class:`BuildRequest`.
     The function should return ``True`` if the combination is acceptable, or ``False`` otherwise.
     This function can optionally return a Deferred which should fire with the same results.
 
+    See :ref:`canStartBuild-Functions` for a concrete example.
+
 ``locks``
-    This argument specifies a list of locks that apply to this builder; see :ref:`Interlocks`.
+    A list of ``Locks`` (instances of :class:`buildbot.locks.WorkerLock` or :class:`buildbot.locks.MasterLock`) that should be acquired before starting a :class:`Build` from this :class:`Builder`.
+    Alternatively this could be a renderable that returns this list depending on properties of related to a build that is just about to be created.
+    This lets you defer picking the locks to acquire until it is known which :class:`Worker` a build would get assigned to.
+    The properties available to the renderable include all properties that are set to the build before its first step excluding the properties that come from the build itself and the ``builddir`` property that comes from worker.
+    The ``Locks`` will be released when the build is complete.
+    Note that this is a list of actual :class:`Lock` instances, not names.
+    Also note that all Locks must have unique names.
+    See :ref:`Interlocks`.
 
 ``env``
     A Builder may be given a dictionary of environment variables in this parameter.
     The variables are used in :bb:step:`ShellCommand` steps in builds created by this builder.
-    The environment variables will override anything in the buildslave's environment.
+    The environment variables will override anything in the worker's environment.
     Variables passed directly to a :class:`ShellCommand` will override variables of the same name passed to the Builder.
 
-    For example, if you have a pool of identical slaves it is often easier to manage variables like :envvar:`PATH` from Buildbot rather than manually editing it inside of the slaves' environment.
+    For example, if you have a pool of identical workers it is often easier to manage variables like :envvar:`PATH` from Buildbot rather than manually editing it inside of the workers' environment.
 
     ::
 
@@ -100,7 +108,7 @@ Other optional keys may be set on each ``BuilderConfig``:
 
         c['builders'] = [
           BuilderConfig(name='test', factory=f,
-                slavenames=['slave1', 'slave2', 'slave3', 'slave4'],
+                workernames=['worker1', 'worker2', 'worker3', 'worker4'],
                 env={'PATH': '/opt/local/bin:/opt/app/bin:/usr/local/bin:/usr/bin'}),
         ]
 
@@ -108,47 +116,52 @@ Other optional keys may be set on each ``BuilderConfig``:
 
 .. index:: Builds; merging
 
-``mergeRequests``
-    Specifies how build requests for this builder should be merged.
-    See :ref:`Merging-Build-Requests`, below.
+``collapseRequests``
+    Specifies how build requests for this builder should be collapsed.
+    See :ref:`Collapsing-Build-Requests`, below.
 
 .. index:: Properties; builder
 
 ``properties``
     A builder may be given a dictionary of :ref:`Build-Properties` specific for this builder in this parameter.
-    Those values can be used later on like other properties. :ref:`Interpolate`.
+    Those values can be used later on like other properties.
+    :ref:`Interpolate`.
 
 ``description``
     A builder may be given an arbitrary description, which will show up in the web status on the builder's page.
 
 .. index:: Builds; merging
 
-.. _Merging-Build-Requests:
+.. _Collapsing-Build-Requests:
 
-Merging Build Requests
-~~~~~~~~~~~~~~~~~~~~~~
+Collapsing Build Requests
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When more than one build request is available for a builder, Buildbot can "merge" the requests into a single build.
-This is desirable when build requests arrive more quickly than the available slaves can satisfy them, but has the drawback that separate results for each build are not available.
+When more than one build request is available for a builder, Buildbot can "collapse" the requests into a single build.
+This is desirable when build requests arrive more quickly than the available workers can satisfy them, but has the drawback that separate results for each build are not available.
 
 Requests are only candidated for a merge if both requests have exactly the same :ref:`codebases<Attr-Codebase>`.
 
-This behavior can be controlled globally, using the :bb:cfg:`mergeRequests` parameter, and on a per-:class:`Builder` basis, using the ``mergeRequests`` argument to the :class:`Builder` configuration.
-If ``mergeRequests`` is given, it completely overrides the global configuration.
+This behavior can be controlled globally, using the :bb:cfg:`collapseRequests` parameter, and on a per-:class:`Builder` basis, using the ``collapseRequests`` argument to the :class:`Builder` configuration.
+If ``collapseRequests`` is given, it completely overrides the global configuration.
 
-For either configuration parameter, a value of ``True`` (the default) causes buildbot to merge BuildRequests that have "compatible" source stamps.
-Source stamps are compatible if:
+Possible values for both ``collapseRequests`` configurations are:
 
-* their codebase, branch, project, and repository attributes match exactly;
-* neither source stamp has a patch (e.g., from a try scheduler); and
-* either both source stamps are associated with changes, or neither ar associated with changes but they have matching revisions.
+``True``
+    Requests will be collapsed if their sourcestamp are compatible (see below for definition of compatible).
 
-This algorithm is implemented by the :class:`SourceStamp` method :func:`canBeMergedWith`.
+``False``
+    Requests will never be collapsed.
 
-A configuration value of ``False`` indicates that requests should never be merged.
+``callable(builder, req1, req2)``
+    Requests will be collapsed if the callable returns true.
+    See :ref:`Collapse-Request-Functions` for detailed example.
 
-The configuration value can also be a callable, specifying a custom merging function.
-See :ref:`Merge-Request-Functions` for details.
+Sourcestamps are compatible if all of the below conditions are met:
+
+* Their codebase, branch, project, and repository attributes match exactly
+* Neither source stamp has a patch (e.g., from a try scheduler)
+* Either both source stamps are associated with changes, or neither are associated with changes but they have matching revisions.
 
 .. index:: Builds; priority
 
@@ -168,5 +181,30 @@ Such a function can be provided to the BuilderConfig as follows::
     c['builders'] = [
         BuilderConfig(name='test', factory=f,
             nextBuild=pickNextBuild,
-            slavenames=['slave1', 'slave2', 'slave3', 'slave4']),
+            workernames=['worker1', 'worker2', 'worker3', 'worker4']),
     ]
+
+.. _Virtual-Builders:
+
+Virtual Builders
+~~~~~~~~~~~~~~~~
+
+:ref:`Dynamic-Trigger` is a method which allows to trigger the same builder, with different parameters.
+This method is used by frameworks which store the build config along side the source code like Buildbot_travis_.
+The drawback of this method is that it is difficult to extract statistics for similar builds.
+The standard dashboards are not working well due to the fact that all the builds are on the same builder.
+
+In order to overcome those drawbacks, Buildbot has the concept of virtual builder.
+If a build has the property ``virtual_builder_name``, it will automatically attach to that builder instead of the original builder.
+That created virtual builder is not attached to any master and is only used for better sorting in the UI and better statistics.
+The original builder and worker configuration is still used for all other build behaviors.
+
+The virtual builder metadata is configured with the following properties:
+
+* ``virtual_builder_name``: The name of the virtual builder.
+
+* ``virtual_builder_description``: The description of the virtual builder.
+
+* ``virtual_builder_tags``: The tags for the virtual builder.
+
+.. _Buildbot_travis: https://github.com/buildbot/buildbot_travis

@@ -13,14 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import util
-from buildbot.test.util import compat
-from buildbot.util import misc
-from buildbot.util.eventual import eventually
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
-from twisted.internet import reactor
-from twisted.python import failure
+from twisted.internet import task
 from twisted.trial import unittest
+
+from buildbot import util
+from buildbot.util import misc
 
 
 class deferredLocked(unittest.TestCase):
@@ -29,46 +30,46 @@ class deferredLocked(unittest.TestCase):
         self.assertEqual(util.deferredLocked, misc.deferredLocked)
 
     def test_fn(self):
-        l = defer.DeferredLock()
+        lock = defer.DeferredLock()
 
-        @util.deferredLocked(l)
+        @util.deferredLocked(lock)
         def check_locked(arg1, arg2):
-            self.assertEqual([l.locked, arg1, arg2], [True, 1, 2])
+            self.assertEqual([lock.locked, arg1, arg2], [True, 1, 2])
             return defer.succeed(None)
         d = check_locked(1, 2)
 
+        @d.addCallback
         def check_unlocked(_):
-            self.assertFalse(l.locked)
-        d.addCallback(check_unlocked)
+            self.assertFalse(lock.locked)
         return d
 
     def test_fn_fails(self):
-        l = defer.DeferredLock()
+        lock = defer.DeferredLock()
 
-        @util.deferredLocked(l)
+        @util.deferredLocked(lock)
         def do_fail():
             return defer.fail(RuntimeError("oh noes"))
         d = do_fail()
 
         def check_unlocked(_):
-            self.assertFalse(l.locked)
+            self.assertFalse(lock.locked)
         d.addCallbacks(lambda _: self.fail("didn't errback"),
-                       lambda _: self.assertFalse(l.locked))
+                       lambda _: self.assertFalse(lock.locked))
         return d
 
     def test_fn_exception(self):
-        l = defer.DeferredLock()
+        lock = defer.DeferredLock()
 
-        @util.deferredLocked(l)
+        @util.deferredLocked(lock)
         def do_fail():
             raise RuntimeError("oh noes")
         # using decorators confuses pylint and gives a false positive below
         d = do_fail()           # pylint: disable=assignment-from-no-return
 
         def check_unlocked(_):
-            self.assertFalse(l.locked)
+            self.assertFalse(lock.locked)
         d.addCallbacks(lambda _: self.fail("didn't errback"),
-                       lambda _: self.assertFalse(l.locked))
+                       lambda _: self.assertFalse(lock.locked))
         return d
 
     def test_method(self):
@@ -78,69 +79,56 @@ class deferredLocked(unittest.TestCase):
 
             @util.deferredLocked('aLock')
             def check_locked(self, arg1, arg2):
-                testcase.assertEqual([self.aLock.locked, arg1, arg2], [True, 1, 2])
+                testcase.assertEqual(
+                    [self.aLock.locked, arg1, arg2], [True, 1, 2])
                 return defer.succeed(None)
         obj = C()
         obj.aLock = defer.DeferredLock()
         d = obj.check_locked(1, 2)
 
+        @d.addCallback
         def check_unlocked(_):
             self.assertFalse(obj.aLock.locked)
-        d.addCallback(check_unlocked)
         return d
 
 
-class SerializedInvocation(unittest.TestCase):
+class TestCancelAfter(unittest.TestCase):
 
-    def waitForQuiet(self, si):
-        d = defer.Deferred()
-        si._quiet = lambda: d.callback(None)
-        return d
+    def setUp(self):
+        self.d = defer.Deferred()
 
-    # tests
+    def test_succeeds(self):
+        d = misc.cancelAfter(10, self.d)
+        self.assertIdentical(d, self.d)
 
-    def test_name(self):
-        self.assertEqual(util.SerializedInvocation, misc.SerializedInvocation)
+        @d.addCallback
+        def check(r):
+            self.assertEqual(r, "result")
+        self.assertFalse(d.called)
+        self.d.callback("result")
+        self.assertTrue(d.called)
 
-    def testCallFolding(self):
-        events = []
+    def test_fails(self):
+        d = misc.cancelAfter(10, self.d)
+        self.assertFalse(d.called)
+        self.d.errback(RuntimeError("oh noes"))
+        self.assertTrue(d.called)
+        self.assertFailure(d, RuntimeError)
 
-        def testfn():
-            d = defer.Deferred()
+    def test_timeout_succeeds(self):
+        c = task.Clock()
+        d = misc.cancelAfter(10, self.d, _reactor=c)
+        self.assertFalse(d.called)
+        c.advance(11)
+        d.callback("result")  # ignored
+        self.assertTrue(d.called)
+        self.assertFailure(d, defer.CancelledError)
 
-            def done():
-                events.append('TM')
-                d.callback(None)
-            eventually(done)
-            return d
-        si = misc.SerializedInvocation(testfn)
-
-        # run three times - the first starts testfn, the second
-        # requires a second run, and the third is folded.
-        d1 = si()
-        d2 = si()
-        d3 = si()
-
-        dq = self.waitForQuiet(si)
-        d = defer.gatherResults([d1, d2, d3, dq])
-
-        def check(_):
-            self.assertEqual(events, ['TM', 'TM'])
-        d.addCallback(check)
-        return d
-
-    @compat.usesFlushLoggedErrors
-    def testException(self):
-        def testfn():
-            d = defer.Deferred()
-            reactor.callLater(0, d.errback,
-                              failure.Failure(RuntimeError("oh noes")))
-            return d
-        si = misc.SerializedInvocation(testfn)
-
-        d = si()
-
-        def check(_):
-            self.assertEqual(len(self.flushLoggedErrors(RuntimeError)), 1)
-        d.addCallback(check)
-        return d
+    def test_timeout_fails(self):
+        c = task.Clock()
+        d = misc.cancelAfter(10, self.d, _reactor=c)
+        self.assertFalse(d.called)
+        c.advance(11)
+        self.d.errback(RuntimeError("oh noes"))  # ignored
+        self.assertTrue(d.called)
+        self.assertFailure(d, defer.CancelledError)

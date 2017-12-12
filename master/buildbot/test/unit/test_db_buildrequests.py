@@ -13,7 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+from future.utils import lrange
+
 import datetime
+
+from twisted.internet import task
+from twisted.trial import unittest
 
 from buildbot.db import buildrequests
 from buildbot.test.fake import fakedb
@@ -23,8 +31,6 @@ from buildbot.test.util import db
 from buildbot.test.util import interfaces
 from buildbot.util import UTC
 from buildbot.util import epoch2datetime
-from twisted.internet import task
-from twisted.trial import unittest
 
 
 class Tests(interfaces.InterfaceTests):
@@ -38,86 +44,95 @@ class Tests(interfaces.InterfaceTests):
     COMPLETE_AT = datetime.datetime(1980, 6, 15, 12, 31, 15, tzinfo=UTC)
     COMPLETE_AT_EPOCH = 329920275
     BSID = 567
-    BSID2 = 5670
-    MASTER_ID = "set in setUpTests"
-    OTHER_MASTER_ID = "set in setUpTests"
-    MASTER_NAME = "testmaster"
-    MASTER_INCARN = "pid123-boot456789"
+    BLDRID1 = 890
+    BLDRID2 = 891
+    BLDRID3 = 893
+    MASTER_ID = "set in setUp"
+    OTHER_MASTER_ID = "set in setUp"
 
     def setUpTests(self):
         # set up a sourcestamp and buildset for use below
         self.MASTER_ID = fakedb.FakeBuildRequestsComponent.MASTER_ID
         self.OTHER_MASTER_ID = self.MASTER_ID + 1111
+        self.db.master.masterid = self.MASTER_ID
 
         return self.insertTestData([
-            fakedb.SourceStampSet(id=234),
-            fakedb.SourceStamp(id=234, sourcestampsetid=234),
-            fakedb.Object(id=self.MASTER_ID, name="fake master",
-                          class_name="BuildMaster"),
-            fakedb.Object(id=self.OTHER_MASTER_ID, name="other master",
-                          class_name="BuildMaster"),
-            fakedb.Buildset(id=self.BSID, sourcestampsetid=234),
+            fakedb.SourceStamp(id=234),
+            fakedb.Master(id=self.MASTER_ID, name="fake master"),
+            fakedb.Master(id=self.OTHER_MASTER_ID, name="other"),
+            fakedb.Buildset(id=self.BSID),
+            fakedb.Builder(id=self.BLDRID1, name="builder1"),
+            fakedb.Builder(id=self.BLDRID2, name="builder2"),
+            fakedb.Builder(id=self.BLDRID3, name="builder3"),
+            fakedb.BuildsetSourceStamp(buildsetid=self.BSID,
+                                       sourcestampid=234),
         ])
 
     # tests
 
     def test_getBuildRequest(self):
         d = self.insertTestData([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID, buildername="bbb",
+            fakedb.BuildRequest(id=44, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, results=75, priority=7,
                                 submitted_at=self.SUBMITTED_AT_EPOCH,
                                 complete_at=self.COMPLETE_AT_EPOCH),
             fakedb.BuildRequestClaim(
-                brid=44, objectid=self.MASTER_ID,
+                brid=44, masterid=self.MASTER_ID,
                 claimed_at=self.CLAIMED_AT_EPOCH),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequest(44))
 
+        @d.addCallback
         def check(brdict):
             self.assertEqual(brdict,
-                             dict(brid=44, buildsetid=self.BSID, buildername="bbb",
-                                  priority=7, claimed=True, mine=True, complete=True,
+                             dict(buildrequestid=44, buildsetid=self.BSID,
+                                  builderid=self.BLDRID1, buildername="builder1",
+                                  priority=7, claimed=True,
+                                  claimed_by_masterid=self.MASTER_ID, complete=True,
                                   results=75, claimed_at=self.CLAIMED_AT,
                                   submitted_at=self.SUBMITTED_AT,
-                                  complete_at=self.COMPLETE_AT))
-        d.addCallback(check)
+                                  complete_at=self.COMPLETE_AT, waited_for=False))
         return d
 
     def test_getBuildRequest_missing(self):
         d = self.db.buildrequests.getBuildRequest(44)
 
+        @d.addCallback
         def check(brdict):
             self.assertEqual(brdict, None)
-        d.addCallback(check)
         return d
 
     def do_test_getBuildRequests_claim_args(self, **kwargs):
         expected = kwargs.pop('expected')
         d = self.insertTestData([
             # 50: claimed by this master
-            fakedb.BuildRequest(id=50, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=50, objectid=self.MASTER_ID,
+            fakedb.BuildRequest(
+                id=50, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=50, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 51: claimed by another master
-            fakedb.BuildRequest(id=51, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=51, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequest(
+                id=51, buildsetid=self.BSID, builderid=self.BLDRID2),
+            fakedb.BuildRequestClaim(brid=51, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 52: unclaimed
-            fakedb.BuildRequest(id=52, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=52, buildsetid=self.BSID, builderid=self.BLDRID1),
 
             # 53: unclaimed but complete (should not appear for claimed=False)
-            fakedb.BuildRequest(id=53, buildsetid=self.BSID, complete=1),
+            fakedb.BuildRequest(
+                id=53, buildsetid=self.BSID, builderid=self.BLDRID1, complete=1),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(**kwargs))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual(sorted([br['brid'] for br in brlist]),
+            self.assertEqual(sorted([br['buildrequestid'] for br in brlist]),
                              sorted(expected))
-        d.addCallback(check)
         return d
 
     def test_getBuildRequests_no_claimed_arg(self):
@@ -126,7 +141,7 @@ class Tests(interfaces.InterfaceTests):
 
     def test_getBuildRequests_claimed_mine(self):
         return self.do_test_getBuildRequests_claim_args(
-            claimed="mine",
+            claimed=self.MASTER_ID,
             expected=[50])
 
     def test_getBuildRequests_claimed_true(self):
@@ -143,61 +158,51 @@ class Tests(interfaces.InterfaceTests):
         expected = kwargs.pop('expected')
         d = self.insertTestData([
             # 8: 'bb'
-            fakedb.BuildRequest(id=8, buildsetid=self.BSID, buildername='bb'),
+            fakedb.BuildRequest(
+                id=8, buildsetid=self.BSID, builderid=self.BLDRID1),
             # 9: 'cc'
-            fakedb.BuildRequest(id=9, buildsetid=self.BSID, buildername='cc'),
+            fakedb.BuildRequest(
+                id=9, buildsetid=self.BSID, builderid=self.BLDRID2),
             # 10: 'cc'
-            fakedb.BuildRequest(id=10, buildsetid=self.BSID, buildername='cc'),
+            fakedb.BuildRequest(
+                id=10, buildsetid=self.BSID, builderid=self.BLDRID2),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(**kwargs))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual(sorted([br['brid'] for br in brlist]),
+            self.assertEqual(sorted([br['buildrequestid'] for br in brlist]),
                              sorted(expected))
-        d.addCallback(check)
         return d
-
-    def test_getBuildRequests_buildername_single(self):
-        return self.do_test_getBuildRequests_buildername_arg(
-            buildername='bb',
-            expected=[8])
-
-    def test_getBuildRequests_buildername_multiple(self):
-        return self.do_test_getBuildRequests_buildername_arg(
-            buildername='cc',
-            expected=[9, 10])
-
-    def test_getBuildRequests_buildername_none(self):
-        return self.do_test_getBuildRequests_buildername_arg(
-            buildername='dd',
-            expected=[])
 
     def do_test_getBuildRequests_complete_arg(self, **kwargs):
         expected = kwargs.pop('expected')
         d = self.insertTestData([
             # 70: incomplete
             fakedb.BuildRequest(id=70, buildsetid=self.BSID,
+                                builderid=self.BLDRID1,
                                 complete=0, complete_at=None),
             # 80: complete
             fakedb.BuildRequest(id=80, buildsetid=self.BSID,
+                                builderid=self.BLDRID1,
                                 complete=1,
                                 complete_at=self.COMPLETE_AT_EPOCH),
             # 81: complete but no complete_at
-            fakedb.BuildRequest(id=81, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=81, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, complete_at=0),
             # 82: complete_at set but complete is false, so not complete
-            fakedb.BuildRequest(id=82, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=82, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0,
                                 complete_at=self.COMPLETE_AT_EPOCH),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(**kwargs))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual(sorted([br['brid'] for br in brlist]),
+            self.assertEqual(sorted([br['buildrequestid'] for br in brlist]),
                              sorted(expected))
-        d.addCallback(check)
         return d
 
     def test_getBuildRequests_complete_none(self):
@@ -217,104 +222,116 @@ class Tests(interfaces.InterfaceTests):
     def test_getBuildRequests_bsid_arg(self):
         d = self.insertTestData([
             # the buildset that we are *not* looking for
-            fakedb.Buildset(id=self.BSID + 1, sourcestampsetid=234),
+            fakedb.Buildset(id=self.BSID + 1),
 
-            fakedb.BuildRequest(id=70, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=70, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=None),
-            fakedb.BuildRequest(id=71, buildsetid=self.BSID + 1,
+            fakedb.BuildRequest(id=71, buildsetid=self.BSID + 1, builderid=self.BLDRID1,
                                 complete=0, complete_at=None),
-            fakedb.BuildRequest(id=72, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=72, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=None),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(bsid=self.BSID))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual(sorted([br['brid'] for br in brlist]),
+            self.assertEqual(sorted([br['buildrequestid'] for br in brlist]),
                              sorted([70, 72]))
-        d.addCallback(check)
         return d
 
     def test_getBuildRequests_combo(self):
         d = self.insertTestData([
             # 44: everything we want
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID, buildername="bbb",
+            fakedb.BuildRequest(id=44, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, results=92,
                                 complete_at=self.COMPLETE_AT_EPOCH),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=44, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
-            # 45: different buildername
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID, buildername="ccc",
+            # 45: different builderid
+            fakedb.BuildRequest(id=45, buildsetid=self.BSID, builderid=self.BLDRID2,
                                 complete=1,
                                 complete_at=self.COMPLETE_AT_EPOCH),
-            fakedb.BuildRequestClaim(brid=45, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=45, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 46: incomplete
-            fakedb.BuildRequest(id=46, buildsetid=self.BSID, buildername="bbb",
+            fakedb.BuildRequest(id=46, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, results=92,
                                 complete_at=0),
-            fakedb.BuildRequestClaim(brid=46, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=46, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 47: unclaimed
-            fakedb.BuildRequest(id=47, buildsetid=self.BSID, buildername="bbb",
+            fakedb.BuildRequest(id=47, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, results=92,
                                 complete_at=self.COMPLETE_AT_EPOCH),
 
             # 48: claimed by other
-            fakedb.BuildRequest(id=48, buildsetid=self.BSID, buildername="bbb",
+            fakedb.BuildRequest(id=48, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, results=92,
                                 complete_at=self.COMPLETE_AT_EPOCH),
-            fakedb.BuildRequestClaim(brid=48, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequestClaim(brid=48, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 49: different bsid
-            fakedb.Buildset(id=self.BSID + 1, sourcestampsetid=234),
+            fakedb.Buildset(id=self.BSID + 1),
             fakedb.BuildRequest(id=49, buildsetid=self.BSID + 1,
-                                buildername="bbb", complete=1, results=92,
+                                builderid=self.BLDRID1, complete=1, results=92,
                                 complete_at=self.COMPLETE_AT_EPOCH),
-            fakedb.BuildRequestClaim(brid=49, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=49, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
         ])
         d.addCallback(lambda _:
-                      self.db.buildrequests.getBuildRequests(buildername="bbb",
-                                                             claimed="mine", complete=True, bsid=self.BSID))
+                      self.db.buildrequests.getBuildRequests(builderid=self.BLDRID1,
+                                                             claimed=self.MASTER_ID,
+                                                             complete=True, bsid=self.BSID))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual([br['brid'] for br in brlist], [44])
-        d.addCallback(check)
+            self.assertEqual([br['buildrequestid'] for br in brlist], [44])
         return d
 
     def do_test_getBuildRequests_branch_arg(self, **kwargs):
         expected = kwargs.pop('expected')
         d = self.insertTestData([
-            fakedb.BuildRequest(id=70, buildsetid=self.BSID + 1),
-            fakedb.Buildset(id=self.BSID + 1, sourcestampsetid=self.BSID + 1),
-            fakedb.SourceStampSet(id=self.BSID + 1),
-            fakedb.SourceStamp(sourcestampsetid=self.BSID + 1,
+            fakedb.Buildset(id=self.BSID + 1),
+            fakedb.BuildRequest(
+                id=70, buildsetid=self.BSID + 1, builderid=self.BLDRID1),
+            fakedb.SourceStamp(id=self.BSID + 1,
                                branch='branch_A'),
+            fakedb.BuildsetSourceStamp(buildsetid=self.BSID + 1,
+                                       sourcestampid=self.BSID + 1),
 
-            fakedb.BuildRequest(id=80, buildsetid=self.BSID + 2),
-            fakedb.Buildset(id=self.BSID + 2, sourcestampsetid=self.BSID + 2),
-            fakedb.SourceStampSet(id=self.BSID + 2),
-            fakedb.SourceStamp(sourcestampsetid=self.BSID + 2,
+            fakedb.Buildset(id=self.BSID + 2),
+            fakedb.BuildRequest(
+                id=80, buildsetid=self.BSID + 2, builderid=self.BLDRID1),
+            fakedb.SourceStamp(id=self.BSID + 2,
                                repository='repository_A'),
+            fakedb.BuildsetSourceStamp(buildsetid=self.BSID + 2,
+                                       sourcestampid=self.BSID + 2),
 
-            fakedb.BuildRequest(id=90, buildsetid=self.BSID + 3),
-            fakedb.Buildset(id=self.BSID + 3, sourcestampsetid=self.BSID + 3),
-            fakedb.SourceStampSet(id=self.BSID + 3),
-            fakedb.SourceStamp(sourcestampsetid=self.BSID + 3,
+            fakedb.Buildset(id=self.BSID + 3),
+            fakedb.BuildRequest(
+                id=90, buildsetid=self.BSID + 3, builderid=self.BLDRID1),
+            fakedb.SourceStamp(id=self.BSID + 3,
                                branch='branch_A', repository='repository_A'),
+            fakedb.BuildsetSourceStamp(buildsetid=self.BSID + 3,
+                                       sourcestampid=self.BSID + 3),
+            # multiple sourcestamps on the same buildset are possible
+            fakedb.SourceStamp(id=self.BSID + 4,
+                               branch='branch_B', repository='repository_B'),
+            fakedb.BuildsetSourceStamp(buildsetid=self.BSID + 3,
+                                       sourcestampid=self.BSID + 4),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(**kwargs))
 
+        @d.addCallback
         def check(brlist):
-            self.assertEqual(sorted([br['brid'] for br in brlist]),
+            self.assertEqual(sorted([br['buildrequestid'] for br in brlist]),
                              sorted(expected))
-        d.addCallback(check)
         return d
 
     def test_getBuildRequests_branch(self):
@@ -340,6 +357,14 @@ class Tests(interfaces.InterfaceTests):
     def test_getBuildRequests_no_repository_nor_branch(self):
         return self.do_test_getBuildRequests_branch_arg(expected=[70, 80, 90])
 
+    def failWithExpFailure(self, expfailure=None):
+        def fail(f):
+            if not expfailure:
+                raise f
+            self.flushLoggedErrors(expfailure)
+            f.trap(expfailure)
+        return fail
+
     def do_test_claimBuildRequests(self, rows, now, brids, expected=None,
                                    expfailure=None, claimed_at=None):
         clock = task.Clock()
@@ -348,72 +373,75 @@ class Tests(interfaces.InterfaceTests):
         d = self.insertTestData(rows)
         d.addCallback(lambda _:
                       self.db.buildrequests.claimBuildRequests(brids=brids,
-                                                               claimed_at=claimed_at, _reactor=clock))
+                                                               claimed_at=claimed_at,
+                                                               _reactor=clock))
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests())
 
+        @d.addCallback
         def check(results):
             self.assertNotEqual(expected, None,
                                 "unexpected success from claimBuildRequests")
             self.assertEqual(
-                sorted([(r['brid'], r['claimed_at'], r['mine'])
+                sorted([(r['buildrequestid'], r['claimed_at'], r['claimed_by_masterid'])
                         for r in results]),
                 sorted(expected))
-        d.addCallback(check)
 
-        def fail(f):
-            if not expfailure:
-                raise f
-            f.trap(expfailure)
-        d.addErrback(fail)
+        d.addErrback(self.failWithExpFailure(expfailure))
         return d
 
     def test_claimBuildRequests_single(self):
         return self.do_test_claimBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
         ], 1300305712, [44],
-            [(44, epoch2datetime(1300305712), True)])
+            [(44, epoch2datetime(1300305712), self.MASTER_ID)])
 
     def test_claimBuildRequests_single_explicit_claimed_at(self):
         return self.do_test_claimBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
         ], 1300305712, [44],
-            [(44, epoch2datetime(14000000), True)],
+            [(44, epoch2datetime(14000000), self.MASTER_ID)],
             claimed_at=epoch2datetime(14000000))
 
     def test_claimBuildRequests_multiple(self):
         return self.do_test_claimBuildRequests(
             [
-                fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-                fakedb.BuildRequest(id=45, buildsetid=self.BSID),
-                fakedb.BuildRequest(id=46, buildsetid=self.BSID),
+                fakedb.BuildRequest(
+                    id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+                fakedb.BuildRequest(
+                    id=45, buildsetid=self.BSID, builderid=self.BLDRID1),
+                fakedb.BuildRequest(
+                    id=46, buildsetid=self.BSID, builderid=self.BLDRID1),
             ],
             1300305712, [44, 46],
             [
-                (44, epoch2datetime(1300305712), True),
-                (45, None, False),
-                (46, epoch2datetime(1300305712), True),
-            ]
-        )
+                (44, epoch2datetime(1300305712), self.MASTER_ID),
+                (45, None, None),
+                (46, epoch2datetime(1300305712), self.MASTER_ID),
+            ])
 
     def test_claimBuildRequests_stress(self):
         return self.do_test_claimBuildRequests(
             [
-                fakedb.BuildRequest(id=id, buildsetid=self.BSID)
-                for id in xrange(1, 1000)
+                fakedb.BuildRequest(
+                    id=id, buildsetid=self.BSID, builderid=self.BLDRID1)
+                for id in range(1, 1000)
             ],
-            1300305713, range(1, 1000),
+            1300305713, lrange(1, 1000),
             [
-                (id, epoch2datetime(1300305713), True)
-                for id in xrange(1, 1000)
+                (id, epoch2datetime(1300305713), self.MASTER_ID)
+                for id in range(1, 1000)
             ]
         )
 
     def test_claimBuildRequests_other_master_claim(self):
         return self.do_test_claimBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
             fakedb.BuildRequestClaim(brid=44,
-                                     objectid=self.OTHER_MASTER_ID,
+                                     masterid=self.OTHER_MASTER_ID,
                                      claimed_at=1300103810),
         ], 1300305712, [44],
             expfailure=buildrequests.AlreadyClaimedError)
@@ -421,27 +449,29 @@ class Tests(interfaces.InterfaceTests):
     @db.skip_for_dialect('mysql')
     def test_claimBuildRequests_other_master_claim_stress(self):
         d = self.do_test_claimBuildRequests(
-            [fakedb.BuildRequest(id=id, buildsetid=self.BSID)
+            [fakedb.BuildRequest(id=id, buildsetid=self.BSID, builderid=self.BLDRID1)
              for id in range(1, 1000)] +
             [
-                fakedb.BuildRequest(id=1000, buildsetid=self.BSID),
+                fakedb.BuildRequest(
+                    id=1000, buildsetid=self.BSID, builderid=self.BLDRID1),
                 # the fly in the ointment..
                 fakedb.BuildRequestClaim(brid=1000,
-                                         objectid=self.OTHER_MASTER_ID, claimed_at=1300103810),
-            ], 1300305712, range(1, 1001),
+                                         masterid=self.OTHER_MASTER_ID, claimed_at=1300103810),
+            ], 1300305712, lrange(1, 1001),
             expfailure=buildrequests.AlreadyClaimedError)
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(claimed=True))
 
+        @d.addCallback
         def check(results):
             # check that [1,1000) were not claimed, and 1000 is still claimed
             self.assertEqual([
-                (r['brid'], r['mine'], r['claimed_at'])
+                (r['buildrequestid'], r[
+                 'claimed_by_masterid'], r['claimed_at'])
                 for r in results
             ][:10], [
-                (1000, False, epoch2datetime(1300103810))
+                (1000, self.OTHER_MASTER_ID, epoch2datetime(1300103810))
             ])
-        d.addCallback(check)
         return d
 
     def test_claimBuildRequests_sequential(self):
@@ -450,8 +480,10 @@ class Tests(interfaces.InterfaceTests):
         clock.advance(now)
 
         d = self.insertTestData([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequest(
+                id=45, buildsetid=self.BSID, builderid=self.BLDRID1),
         ])
         d.addCallback(lambda _:
                       self.db.buildrequests.claimBuildRequests(brids=[44],
@@ -462,123 +494,55 @@ class Tests(interfaces.InterfaceTests):
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(claimed=False))
 
+        @d.addCallback
         def check(results):
             self.assertEqual(results, [])
-        d.addCallback(check)
-        return d
-
-    def do_test_reclaimBuildRequests(self, rows, now, brids, expected=None,
-                                     expfailure=None):
-        clock = task.Clock()
-        clock.advance(now)
-
-        d = self.insertTestData(rows)
-        d.addCallback(lambda _:
-                      self.db.buildrequests.reclaimBuildRequests(brids=brids,
-                                                                 _reactor=clock))
-        d.addCallback(lambda _:
-                      self.db.buildrequests.getBuildRequests())
-
-        def check(results):
-            self.assertNotEqual(expected, None,
-                                "unexpected success from claimBuildRequests")
-            self.assertEqual(
-                sorted([
-                    (r['brid'], r['claimed_at'], r['mine'])
-                    for r in results
-                ]),
-                sorted(expected)
-            )
-        d.addCallback(check)
-
-        def fail(f):
-            if not expfailure:
-                raise f
-            f.trap(expfailure)
-        d.addErrback(fail)
-        return d
-
-    def test_reclaimBuildRequests(self):
-        return self.do_test_reclaimBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
-                                     claimed_at=1300103810),
-        ], 1300305712, [44],
-            # note that the time is updated
-            [(44, epoch2datetime(1300305712), True)])
-
-    def test_reclaimBuildRequests_fail(self):
-        d = self.do_test_reclaimBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
-                                     claimed_at=1300103810),
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=45, objectid=self.OTHER_MASTER_ID,
-                                     claimed_at=1300103810),
-        ], 1300305712, [44, 45],
-            expfailure=buildrequests.AlreadyClaimedError)
-
-        # check that the time wasn't updated on 44, noting that MySQL does
-        # not support this.
-        if self.db_engine.dialect.name == 'mysql':
-            return d
-
-        d.addCallback(lambda _:
-                      self.db.buildrequests.getBuildRequests())
-
-        def check(results):
-            self.assertEqual(sorted(
-                (r['brid'], r['claimed_at'], r['mine'])
-                for r in results
-            ), [
-                (44, epoch2datetime(1300103810), True),
-                (45, epoch2datetime(1300103810), False),
-            ])
-        d.addCallback(check)
         return d
 
     def do_test_completeBuildRequests(self, rows, now, expected=None,
-                                      expfailure=None, brids=[44],
+                                      expfailure=None, brids=None,
                                       complete_at=None):
+        if brids is None:
+            brids = [44]
         clock = task.Clock()
         clock.advance(now)
 
         d = self.insertTestData(rows)
         d.addCallback(lambda _:
                       self.db.buildrequests.completeBuildRequests(brids=brids,
-                                                                  results=7, complete_at=complete_at,
+                                                                  results=7,
+                                                                  complete_at=complete_at,
                                                                   _reactor=clock))
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests())
 
+        @d.addCallback
         def check(results):
             self.assertNotEqual(expected, None,
                                 "unexpected success from completeBuildRequests")
             self.assertEqual(sorted(
-                (r['brid'], r['complete'], r['results'], r['complete_at'])
+                (r['buildrequestid'], r['complete'],
+                 r['results'], r['complete_at'])
                 for r in results
             ), sorted(expected))
-        d.addCallback(check)
 
-        def fail(f):
-            if not expfailure:
-                raise f
-            f.trap(expfailure)
-        d.addErrback(fail)
+        d.addErrback(self.failWithExpFailure(expfailure))
         return d
 
     def test_completeBuildRequests(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=44, masterid=self.MASTER_ID,
                                      claimed_at=1300103810),
         ], 1300305712,
             [(44, True, 7, epoch2datetime(1300305712))])
 
     def test_completeBuildRequests_explicit_time(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=44, masterid=self.MASTER_ID,
                                      claimed_at=1300103810),
         ], 1300305712,
             [(44, True, 7, epoch2datetime(999999))],
@@ -586,14 +550,17 @@ class Tests(interfaces.InterfaceTests):
 
     def test_completeBuildRequests_multiple(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=44, masterid=self.MASTER_ID,
                                      claimed_at=1300103810),
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=45, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequest(
+                id=45, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=45, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=1300103811),
-            fakedb.BuildRequest(id=46, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=46, objectid=self.MASTER_ID,
+            fakedb.BuildRequest(
+                id=46, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=46, masterid=self.MASTER_ID,
                                      claimed_at=1300103812),
         ], 1300305712,
             [(44, True, 7, epoch2datetime(1300305712)),
@@ -603,26 +570,30 @@ class Tests(interfaces.InterfaceTests):
 
     def test_completeBuildRequests_stress(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=id, buildsetid=self.BSID)
+            fakedb.BuildRequest(
+                id=id, buildsetid=self.BSID, builderid=self.BLDRID1)
             for id in range(1, 280)
         ] + [
-            fakedb.BuildRequestClaim(brid=id, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=id, masterid=self.MASTER_ID,
                                      claimed_at=1300103810)
             for id in range(1, 280)
         ], 1300305712,
             [(id, True, 7, epoch2datetime(1300305712))
                 for id in range(1, 280)
-             ], brids=range(1, 280))
+             ], brids=lrange(1, 280))
 
     def test_completeBuildRequests_multiple_notmine(self):
         # note that the requests are completed even though they are not mine!
         return self.do_test_completeBuildRequests([
             # two unclaimed requests
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID),
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=44, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequest(
+                id=45, buildsetid=self.BSID, builderid=self.BLDRID1),
             # and one claimed by another master
-            fakedb.BuildRequest(id=46, buildsetid=self.BSID),
-            fakedb.BuildRequestClaim(brid=46, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequest(
+                id=46, buildsetid=self.BSID, builderid=self.BLDRID1),
+            fakedb.BuildRequestClaim(brid=46, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=1300103812),
         ], 1300305712,
             [(44, True, 7, epoch2datetime(1300305712)),
@@ -632,52 +603,53 @@ class Tests(interfaces.InterfaceTests):
 
     def test_completeBuildRequests_already_completed(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=44, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, complete_at=1300104190),
         ], 1300305712,
             expfailure=buildrequests.NotClaimedError)
 
     def test_completeBuildRequests_no_such(self):
         return self.do_test_completeBuildRequests([
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID),
+            fakedb.BuildRequest(
+                id=45, buildsetid=self.BSID, builderid=self.BLDRID1),
         ], 1300305712,
             expfailure=buildrequests.NotClaimedError)
 
     def do_test_unclaimMethod(self, method, expected):
         d = self.insertTestData([
             # 44: a complete build (should not be unclaimed)
-            fakedb.BuildRequest(id=44, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=44, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=1, results=92,
                                 complete_at=self.COMPLETE_AT_EPOCH),
-            fakedb.BuildRequestClaim(brid=44, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=44, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 45: incomplete build belonging to this incarnation
-            fakedb.BuildRequest(id=45, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=45, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=0),
-            fakedb.BuildRequestClaim(brid=45, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=45, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 46: incomplete build belonging to another master
-            fakedb.BuildRequest(id=46, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=46, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=0),
-            fakedb.BuildRequestClaim(brid=46, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequestClaim(brid=46, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH),
 
             # 47: unclaimed
-            fakedb.BuildRequest(id=47, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=47, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=0),
 
             # 48: claimed by this master, but recently
-            fakedb.BuildRequest(id=48, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=48, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=0),
-            fakedb.BuildRequestClaim(brid=48, objectid=self.MASTER_ID,
+            fakedb.BuildRequestClaim(brid=48, masterid=self.MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH - 50),
 
             # 49: incomplete old build belonging to another master
-            fakedb.BuildRequest(id=49, buildsetid=self.BSID,
+            fakedb.BuildRequest(id=49, buildsetid=self.BSID, builderid=self.BLDRID1,
                                 complete=0, complete_at=0),
-            fakedb.BuildRequestClaim(brid=49, objectid=self.OTHER_MASTER_ID,
+            fakedb.BuildRequestClaim(brid=49, masterid=self.OTHER_MASTER_ID,
                                      claimed_at=self.CLAIMED_AT_EPOCH - 1000),
         ])
         d.addCallback(lambda _: method())
@@ -685,20 +657,11 @@ class Tests(interfaces.InterfaceTests):
         d.addCallback(lambda _:
                       self.db.buildrequests.getBuildRequests(claimed=False))
 
+        @d.addCallback
         def check(results):
-            self.assertEqual(sorted([r['brid'] for r in results]),
+            self.assertEqual(sorted([r['buildrequestid'] for r in results]),
                              sorted(expected))
-        d.addCallback(check)
         return d
-
-    def test_unclaimExpiredRequests(self):
-        clock = task.Clock()
-        clock.advance(self.CLAIMED_AT_EPOCH)
-
-        meth = self.db.buildrequests.unclaimExpiredRequests
-        return self.do_test_unclaimMethod(
-            lambda: meth(100, _reactor=clock),
-            [47, 49])
 
     def test_unclaimBuildRequests(self):
         to_unclaim = [
@@ -716,7 +679,7 @@ class Tests(interfaces.InterfaceTests):
 
 
 class TestFakeDB(unittest.TestCase, Tests):
-    # Compatiblity with some checks in the "real" tests.
+    # Compatibility with some checks in the "real" tests.
 
     class db_engine:
 
@@ -726,6 +689,7 @@ class TestFakeDB(unittest.TestCase, Tests):
     def setUp(self):
         self.master = fakemaster.make_master(wantDb=True, testcase=self)
         self.db = self.master.db
+        self.db.checkForeignKeys = True
         self.insertTestData = self.db.insertTestData
         return self.setUpTests()
 
@@ -736,9 +700,11 @@ class TestRealDB(unittest.TestCase,
 
     def setUp(self):
         d = self.setUpConnectorComponent(
-            table_names=['patches', 'changes', 'sourcestamp_changes',
+            table_names=['patches', 'changes', 'builders',
                          'buildsets', 'buildset_properties', 'buildrequests',
-                         'objects', 'buildrequest_claims', 'sourcestamps', 'sourcestampsets'])
+                         'buildset_sourcestamps', 'masters', 'buildrequest_claims',
+                         'sourcestamps', 'sourcestampsets', 'builds', 'workers',
+                         ])
 
         @d.addCallback
         def finish_setup(_):

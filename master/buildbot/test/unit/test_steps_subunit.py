@@ -13,22 +13,26 @@
 #
 # Copyright Buildbot Team Members
 
-import StringIO
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
+from twisted.python.compat import NativeStringIO
+from twisted.trial import unittest
+from zope.interface import implementer
+
 from buildbot import interfaces
-from buildbot.process import subunitlogobserver
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
 from buildbot.steps import subunit
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import steps
-from twisted.trial import unittest
-from zope.interface import implements
 
 
+@implementer(interfaces.ILogObserver)
 class StubLogObserver(mock.Mock):
-    implements(interfaces.ILogObserver)
+    pass
 
 
 class TestSetPropertiesFromEnv(steps.BuildStepMixin, unittest.TestCase):
@@ -39,8 +43,8 @@ class TestSetPropertiesFromEnv(steps.BuildStepMixin, unittest.TestCase):
         self.logobserver.errors = []
         self.logobserver.skips = []
         self.logobserver.testsRun = 0
-        self.logobserver.warningio = StringIO.StringIO()
-        self.patch(subunitlogobserver, 'SubunitLogObserver',
+        self.logobserver.warningio = NativeStringIO()
+        self.patch(subunit, 'SubunitLogObserver',
                    lambda: self.logobserver)
         return self.setUpBuildStep()
 
@@ -50,30 +54,30 @@ class TestSetPropertiesFromEnv(steps.BuildStepMixin, unittest.TestCase):
     def test_empty(self):
         self.setupStep(subunit.SubunitShellCommand(command='test'))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command="test")
             + 0
         )
         self.expectOutcome(result=SUCCESS,
-                           status_text=["shell", "no tests", "run"])
+                           state_string="shell no tests run")
         return self.runStep()
 
     def test_empty_error(self):
         self.setupStep(subunit.SubunitShellCommand(command='test',
                                                    failureOnNoTests=True))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command="test")
             + 0
         )
         self.expectOutcome(result=FAILURE,
-                           status_text=["shell", "no tests", "run"])
+                           state_string="shell no tests run (failure)")
         return self.runStep()
 
     def test_warnings(self):
         self.setupStep(subunit.SubunitShellCommand(command='test'))
         self.expectCommands(
-            ExpectShell(workdir='wkdir', usePTY='slave-config',
+            ExpectShell(workdir='wkdir',
                         command="test")
             + 0
         )
@@ -81,7 +85,7 @@ class TestSetPropertiesFromEnv(steps.BuildStepMixin, unittest.TestCase):
         self.logobserver.warningio.write('not quite up to snuff (io)\n')
         self.logobserver.testsRun = 3
         self.expectOutcome(result=SUCCESS,  # N.B. not WARNINGS
-                           status_text=["shell", "3 tests", "passed"])
+                           state_string="shell 3 tests passed")
         # note that the warnings list is ignored..
         self.expectLogfile('warnings', 'not quite up to snuff (io)\n')
         return self.runStep()

@@ -13,16 +13,153 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import integer_types
+from future.utils import iteritems
+from future.utils import itervalues
+from future.utils import string_types
+
 import calendar
 
-from buildbot import interfaces
-from buildbot import sourcestamp
-from buildbot.db import buildrequests
-from buildbot.process import properties
-from buildbot.status.results import FAILURE
 from twisted.internet import defer
-from twisted.python import log
-from zope.interface import implements
+
+from buildbot.data import resultspec
+from buildbot.process import properties
+from buildbot.process.results import SKIPPED
+
+
+class BuildRequestCollapser(object):
+    # brids is a list of the new added buildrequests id
+    # This class is called before generated the 'new' event for the
+    # buildrequest
+
+    # Before adding new buildset/buildrequests, we must examine each unclaimed
+    # buildrequest.
+    # EG:
+    #  1. get the list of all unclaimed buildrequests:
+    #     - We must exclude all buildsets which have at least 1 claimed buildrequest
+    #  2. For each unclaimed buildrequests, if compatible with the new request
+    #     (sourcestamps match, except for revision) Then:
+    #     2.1. claim it
+    #     2.2. complete it with result SKIPPED
+
+    def __init__(self, master, brids):
+        self.master = master
+        self.brids = brids
+
+    @defer.inlineCallbacks
+    def _getUnclaimedBrs(self, builderid):
+        # Retrieve the list of Brs for all unclaimed builds
+        unclaim_brs = yield self.master.data.get(('builders',
+                                                  builderid,
+                                                  'buildrequests'),
+                                                 [resultspec.Filter('claimed',
+                                                                    'eq',
+                                                                    [False])])
+        # sort by submitted_at, so the first is the oldest
+        unclaim_brs.sort(key=lambda brd: brd['submitted_at'])
+        defer.returnValue(unclaim_brs)
+
+    @defer.inlineCallbacks
+    def collapse(self):
+        brids = set()
+
+        for brid in self.brids:
+            # Get the BuildRequest object
+            br = yield self.master.data.get(('buildrequests', brid))
+            # Retrieve the buildername
+            builderid = br['builderid']
+            bldrdict = yield self.master.data.get(('builders', builderid))
+            # Get the builder object
+            bldr = self.master.botmaster.builders.get(bldrdict['name'])
+            # Get the Collapse BuildRequest function (from the configuration)
+            collapseRequestsFn = bldr.getCollapseRequestsFn() if bldr else None
+            unclaim_brs = yield self._getUnclaimedBrs(builderid)
+
+            # short circuit if there is no merging to do
+            if not collapseRequestsFn or not unclaim_brs:
+                continue
+
+            for unclaim_br in unclaim_brs:
+                if unclaim_br['buildrequestid'] == br['buildrequestid']:
+                    continue
+
+                canCollapse = yield collapseRequestsFn(self.master, bldr, br, unclaim_br)
+                if canCollapse is True:
+                    brids.add(unclaim_br['buildrequestid'])
+
+        brids = list(brids)
+        if brids:
+            # Claim the buildrequests
+            yield self.master.data.updates.claimBuildRequests(brids)
+            # complete the buildrequest with result SKIPPED.
+            yield self.master.data.updates.completeBuildRequests(brids,
+                                                                 SKIPPED)
+
+        defer.returnValue(brids)
+
+
+class TempSourceStamp(object):
+    # temporary fake sourcestamp
+
+    ATTRS = ('branch', 'revision', 'repository', 'project', 'codebase')
+
+    def __init__(self, ssdict):
+        self._ssdict = ssdict
+
+    def __getattr__(self, attr):
+        patch = self._ssdict.get('patch')
+        if attr == 'patch':
+            if patch:
+                return (patch['level'], patch['body'], patch['subdir'])
+            return None
+        elif attr == 'patch_info':
+            if patch:
+                return (patch['author'], patch['comment'])
+            return (None, None)
+        elif attr in self.ATTRS or attr == 'ssid':
+            return self._ssdict[attr]
+        raise AttributeError(attr)
+
+    def asSSDict(self):
+        return self._ssdict
+
+    PATCH_ATTRS = ('level', 'body', 'subdir', 'author', 'comment')
+
+    def asDict(self):
+        # This return value should match the kwargs to
+        # SourceStampsConnectorComponent.findSourceStampId
+        result = {}
+        for attr in self.ATTRS:
+            result[attr] = self._ssdict[attr]
+
+        patch = self._ssdict.get('patch') or {}
+        for attr in self.PATCH_ATTRS:
+            result['patch_%s' % attr] = patch.get(attr)
+
+        assert all(
+            isinstance(val, string_types + integer_types + (type(None),))
+            for attr, val in iteritems(result)
+        ), result
+        return result
+
+
+class TempChange(object):
+    # temporary fake change
+
+    def __init__(self, d):
+        self._chdict = d
+
+    def __getattr__(self, attr):
+        if attr == 'who':
+            return self._chdict['author']
+        elif attr == 'properties':
+            return properties.Properties.fromDict(self._chdict['properties'])
+        return self._chdict[attr]
+
+    def asChDict(self):
+        return self._chdict
 
 
 class BuildRequest(object):
@@ -31,23 +168,10 @@ class BuildRequest(object):
 
     A rolled-up encapsulation of all of the data relevant to a build request.
 
-    This class is used by the C{nextBuild} and C{mergeRequests} configuration
+    This class is used by the C{nextBuild} and C{collapseRequests} configuration
     parameters, as well as in starting a build.  Construction of a BuildRequest
     object is a heavyweight process involving a lot of database queries, so
     it should be avoided where possible.  See bug #1894.
-
-    Build requests have a SourceStamp which specifies what sources to build.
-    This may specify a specific revision of the source tree (so source.branch,
-    source.revision, and source.patch are used). The .patch attribute is either
-    None or a tuple of (patchlevel, diff), consisting of a number to use in
-    'patch -pN', and a unified-format context diff.
-
-    Alternatively, the SourceStamp may specify a set of Changes to be built,
-    contained in source.changes. In this case, the requeset may be mergeable
-    with other BuildRequests on the same branch.
-
-    @type source: L{buildbot.sourcestamp.SourceStamp}
-    @ivar source: the source stamp that this BuildRequest use
 
     @type reason: string
     @ivar reason: the reason this Build is being requested. Schedulers provide
@@ -72,9 +196,8 @@ class BuildRequest(object):
     @ivar bsid: ID of the parent buildset
     """
 
-    source = None
-    sources = None
     submittedAt = None
+    sources = {}
 
     @classmethod
     def fromBrdict(cls, master, brdict):
@@ -92,7 +215,7 @@ class BuildRequest(object):
         @returns: L{BuildRequest}, via Deferred
         """
         cache = master.caches.get_cache("BuildRequests", cls._make_br)
-        return cache.get(brdict['brid'], brdict=brdict, master=master)
+        return cache.get(brdict['buildrequestid'], brdict=brdict, master=master)
 
     @classmethod
     @defer.inlineCallbacks
@@ -100,11 +223,14 @@ class BuildRequest(object):
         buildrequest = cls()
         buildrequest.id = brid
         buildrequest.bsid = brdict['buildsetid']
-        buildrequest.buildername = brdict['buildername']
+        builder = yield master.db.builders.getBuilder(brdict['builderid'])
+        buildrequest.buildername = builder['name']
+        buildrequest.builderid = brdict['builderid']
         buildrequest.priority = brdict['priority']
         dt = brdict['submitted_at']
         buildrequest.submittedAt = dt and calendar.timegm(dt.utctimetuple())
         buildrequest.master = master
+        buildrequest.waitedFor = brdict['waited_for']
 
         # fetch the buildset to get the reason
         buildset = yield master.db.buildsets.getBuildset(brdict['buildsetid'])
@@ -114,86 +240,87 @@ class BuildRequest(object):
         # fetch the buildset properties, and convert to Properties
         buildset_properties = yield master.db.buildsets.getBuildsetProperties(brdict['buildsetid'])
 
-        buildrequest.properties = properties.Properties.fromDict(buildset_properties)
+        buildrequest.properties = properties.Properties.fromDict(
+            buildset_properties)
 
-        # fetch the sourcestamp dictionary
-        sslist = yield master.db.sourcestamps.getSourceStamps(buildset['sourcestampsetid'])
-        assert len(sslist) > 0, "Empty sourcestampset: db schema enforces set to exist but cannot enforce a non empty set"
-
-        # and turn it into a SourceStamps
+        # make a fake sources dict (temporary)
+        bsdata = yield master.data.get(('buildsets', str(buildrequest.bsid)))
+        assert bsdata[
+            'sourcestamps'], "buildset must have at least one sourcestamp"
         buildrequest.sources = {}
-
-        def store_source(source):
-            buildrequest.sources[source.codebase] = source
-
-        dlist = []
-        for ssdict in sslist:
-            d = sourcestamp.SourceStamp.fromSsdict(master, ssdict)
-            d.addCallback(store_source)
-            dlist.append(d)
-
-        yield defer.gatherResults(dlist)
-
-        if buildrequest.sources:
-            buildrequest.source = buildrequest.sources.values()[0]
+        for ssdata in bsdata['sourcestamps']:
+            ss = buildrequest.sources[ssdata['codebase']] = TempSourceStamp(ssdata)
+            changes = yield master.data.get(("sourcestamps", ss.ssid, "changes"))
+            ss.changes = [TempChange(change) for change in changes]
 
         defer.returnValue(buildrequest)
 
-    def requestsHaveSameCodebases(self, other):
-        self_codebases = set(self.sources.iterkeys())
-        other_codebases = set(other.sources.iterkeys())
-        return self_codebases == other_codebases
-
-    def requestsHaveChangesForSameCodebases(self, other):
-        # Merge can only be done if both requests have sourcestampsets containing
-        # comparable sourcestamps, that means sourcestamps with the same codebase.
-        # This means that both requests must have exact the same set of codebases
-        # If not then merge cannot be performed.
-        # The second requirement is that both request have the changes in the
-        # same codebases.
-        #
-        # Normaly a scheduler always delivers the same set of codebases:
-        #   sourcestamps with and without changes
-        # For the case a scheduler is not configured with a set of codebases
-        # it delivers only a set with sourcestamps that have changes.
-        self_codebases = set(self.sources.iterkeys())
-        other_codebases = set(other.sources.iterkeys())
-        if self_codebases != other_codebases:
-            return False
-
-        for c in self_codebases:
-            # Check either both or neither have changes
-            if ((len(self.sources[c].changes) > 0)
-                    != (len(other.sources[c].changes) > 0)):
-                return False
-        # all codebases tested, no differences found
-        return True
-
-    def canBeMergedWith(self, other):
+    @staticmethod
+    @defer.inlineCallbacks
+    def canBeCollapsed(master, br1, br2):
         """
-        Returns if both requests can be merged
+        Returns true if both buildrequest can be merged, via Deferred.
+
+        This implements Buildbot's default collapse strategy.
         """
+        # short-circuit: if these are for the same buildset, collapse away
+        if br1['buildsetid'] == br2['buildsetid']:
+            defer.returnValue(True)
 
-        if not self.requestsHaveChangesForSameCodebases(other):
-            return False
+        # get the buidlsets for each buildrequest
+        selfBuildsets = yield master.data.get(
+            ('buildsets', str(br1['buildsetid'])))
+        otherBuildsets = yield master.data.get(
+            ('buildsets', str(br2['buildsetid'])))
 
-        # get codebases from myself, they are equal to other
-        self_codebases = set(self.sources.iterkeys())
+        # extract sourcestamps, as dictionaries by codebase
+        selfSources = dict((ss['codebase'], ss)
+                           for ss in selfBuildsets['sourcestamps'])
+        otherSources = dict((ss['codebase'], ss)
+                            for ss in otherBuildsets['sourcestamps'])
 
-        for c in self_codebases:
-            # check to prevent exception
-            if c not in other.sources:
-                return False
-            if not self.sources[c].canBeMergedWith(other.sources[c]):
-                return False
-        return True
+        # if the sets of codebases do not match, we can't collapse
+        if set(selfSources) != set(otherSources):
+            defer.returnValue(False)
+
+        for c, selfSS in iteritems(selfSources):
+            otherSS = otherSources[c]
+            if selfSS['repository'] != otherSS['repository']:
+                defer.returnValue(False)
+
+            if selfSS['branch'] != otherSS['branch']:
+                defer.returnValue(False)
+
+            if selfSS['project'] != otherSS['project']:
+                defer.returnValue(False)
+
+            # anything with a patch won't be collapsed
+            if selfSS['patch'] or otherSS['patch']:
+                defer.returnValue(False)
+            # get changes & compare
+            selfChanges = yield master.data.get(('sourcestamps', selfSS['ssid'], 'changes'))
+            otherChanges = yield master.data.get(('sourcestamps', otherSS['ssid'], 'changes'))
+            # if both have changes, proceed, else fail - if no changes check revision instead
+            if selfChanges and otherChanges:
+                continue
+            elif selfChanges and not otherChanges:
+                defer.returnValue(False)
+
+            elif not selfChanges and otherChanges:
+                defer.returnValue(False)
+
+            # else check revisions
+            elif selfSS['revision'] != otherSS['revision']:
+                defer.returnValue(False)
+
+        defer.returnValue(True)
 
     def mergeSourceStampsWith(self, others):
         """ Returns one merged sourcestamp for every codebase """
         # get all codebases from all requests
-        all_codebases = set(self.sources.iterkeys())
+        all_codebases = set(self.sources)
         for other in others:
-            all_codebases |= set(other.sources.iterkeys())
+            all_codebases |= set(other.sources)
 
         all_merged_sources = {}
         # walk along the codebases
@@ -204,10 +331,14 @@ class BuildRequest(object):
             for other in others:
                 if codebase in other.sources:
                     all_sources.append(other.sources[codebase])
-            assert len(all_sources) > 0, "each codebase should have atleast one sourcestamp"
-            all_merged_sources[codebase] = all_sources[0].mergeWith(all_sources[1:])
+            assert all_sources, "each codebase should have at least one sourcestamp"
 
-        return [source for source in all_merged_sources.itervalues()]
+            # TODO: select the sourcestamp that best represents the merge,
+            # preferably the latest one.  This used to be accomplished by
+            # looking at changeids and picking the highest-numbered.
+            all_merged_sources[codebase] = all_sources[-1]
+
+        return list(itervalues(all_merged_sources))
 
     def mergeReasons(self, others):
         """Return a reason for the merged build request."""
@@ -219,41 +350,3 @@ class BuildRequest(object):
 
     def getSubmitTime(self):
         return self.submittedAt
-
-    @defer.inlineCallbacks
-    def cancelBuildRequest(self):
-        # first, try to claim the request; if this fails, then it's too late to
-        # cancel the build anyway
-        try:
-            yield self.master.db.buildrequests.claimBuildRequests([self.id])
-        except buildrequests.AlreadyClaimedError:
-            log.msg("build request already claimed; cannot cancel")
-            return
-
-        # then complete it with 'FAILURE'; this is the closest we can get to
-        # cancelling a request without running into trouble with dangling
-        # references.
-        yield self.master.db.buildrequests.completeBuildRequests([self.id],
-                                                                 FAILURE)
-
-        # and let the master know that the enclosing buildset may be complete
-        yield self.master.maybeBuildsetComplete(self.bsid)
-
-
-class BuildRequestControl:
-    implements(interfaces.IBuildRequestControl)
-
-    def __init__(self, builder, request):
-        self.original_builder = builder
-        self.original_request = request
-        self.brid = request.id
-
-    def subscribe(self, observer):
-        raise NotImplementedError
-
-    def unsubscribe(self, observer):
-        raise NotImplementedError
-
-    def cancel(self):
-        d = self.original_request.cancelBuildRequest()
-        d.addErrback(log.err, 'while cancelling build request')

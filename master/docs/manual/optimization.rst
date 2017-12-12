@@ -8,8 +8,7 @@ If you're feeling your Buildbot is running a bit slow, here are some tricks that
 Properties load speedup
 -----------------------
 
-For example, if most of your build properties are strings, you can gain an approx.
-30% speedup if you put this snippet of code inside your master.cfg file::
+For example, if most of your build properties are strings, you can gain an approx. 30% speedup if you put this snippet of code inside your master.cfg file::
 
     def speedup_json_loads():
         import json, re
@@ -20,7 +19,7 @@ For example, if most of your build properties are strings, you can gain an appro
             m = my_regexp.match(str)
             try:
                 return list(m.groups())
-            except:
+            except Exception:
                 return original_decode(str, *args, **kw)
         json._default_decoder.decode = decode_with_re
 

@@ -13,11 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
+
+from twisted.trial import unittest
 
 from buildbot.clients import tryclient
 from buildbot.scripts import trycmd
-from twisted.trial import unittest
 
 
 class TestStatusLog(unittest.TestCase):

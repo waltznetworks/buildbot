@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.python import failure
 from twisted.python import log
 
@@ -35,7 +38,7 @@ class SubscriptionPoint(object):
         for sub in list(self.subscriptions):
             try:
                 sub.callback(*args, **kwargs)
-            except:
+            except Exception:
                 log.err(failure.Failure(),
                         'while invoking callback %s to %s' % (sub.callback, self))
 

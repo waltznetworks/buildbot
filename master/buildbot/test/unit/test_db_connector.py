@@ -13,15 +13,25 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import absolute_import
+from __future__ import print_function
+
 import os
+
+import mock
+
+from twisted.internet import defer
+from twisted.trial import unittest
 
 from buildbot import config
 from buildbot.db import connector
+from buildbot.db import exceptions
 from buildbot.test.fake import fakemaster
 from buildbot.test.util import db
-from twisted.internet import defer
-from twisted.trial import unittest
+from buildbot.test.util.warnings import assertNotProducesWarnings
+from buildbot.test.util.warnings import assertProducesWarning
+from buildbot.worker_transition import DeprecatedWorkerAPIWarning
+from buildbot.worker_transition import DeprecatedWorkerNameWarning
 
 
 class DBConnector(db.RealDatabaseMixin, unittest.TestCase):
@@ -35,12 +45,13 @@ class DBConnector(db.RealDatabaseMixin, unittest.TestCase):
         yield self.setUpRealDatabase(table_names=[
             'changes', 'change_properties', 'change_files', 'patches',
             'sourcestamps', 'buildset_properties', 'buildsets',
-            'sourcestampsets'])
+            'sourcestampsets', 'builds', 'builders', 'masters',
+            'buildrequests', 'workers'])
 
         self.master = fakemaster.make_master()
         self.master.config = config.MasterConfig()
-        self.db = connector.DBConnector(self.master,
-                                        os.path.abspath('basedir'))
+        self.db = connector.DBConnector(os.path.abspath('basedir'))
+        self.db.setServiceParent(self.master)
 
     @defer.inlineCallbacks
     def tearDown(self):
@@ -54,15 +65,14 @@ class DBConnector(db.RealDatabaseMixin, unittest.TestCase):
         self.master.config.db['db_url'] = self.db_url
         yield self.db.setup(check_version=check_version)
         self.db.startService()
-        yield self.db.reconfigService(self.master.config)
+        yield self.db.reconfigServiceWithBuildbotConfig(self.master.config)
 
     # tests
+    @defer.inlineCallbacks
     def test_doCleanup_service(self):
-        d = self.startService()
+        yield self.startService()
 
-        @d.addCallback
-        def check(_):
-            self.assertTrue(self.db.cleanup_timer.running)
+        self.assertTrue(self.db.cleanup_timer.running)
 
     def test_doCleanup_unconfigured(self):
         self.db.changes.pruneChanges = mock.Mock(
@@ -82,9 +92,26 @@ class DBConnector(db.RealDatabaseMixin, unittest.TestCase):
         return d
 
     def test_setup_check_version_bad(self):
+        if self.db_url == 'sqlite://':
+            raise unittest.SkipTest(
+                'sqlite in-memory model is always upgraded at connection')
         d = self.startService(check_version=True)
-        return self.assertFailure(d, connector.DatabaseNotReadyError)
+        return self.assertFailure(d, exceptions.DatabaseNotReadyError)
 
     def test_setup_check_version_good(self):
         self.db.model.is_current = lambda: defer.succeed(True)
         return self.startService(check_version=True)
+
+    @defer.inlineCallbacks
+    def test_workersrc_old_api(self):
+        yield self.startService()
+
+        with assertNotProducesWarnings(DeprecatedWorkerAPIWarning):
+            new = self.db.workers
+
+        with assertProducesWarning(
+                DeprecatedWorkerNameWarning,
+                message_pattern="'buildslaves' attribute is deprecated"):
+            old = self.db.buildslaves
+
+        self.assertIdentical(new, old)

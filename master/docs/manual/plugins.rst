@@ -1,3 +1,5 @@
+.. _Plugins:
+
 =================================
 Plugin Infrastructure in Buildbot
 =================================
@@ -18,8 +20,8 @@ The following snippet
 allows to use a component of kind ``kind``.
 Available ``kind``\s are:
 
-``buildslave``
-    build slaves, described in :doc:`cfg-buildslaves`
+``worker``
+    workers, described in :doc:`cfg-workers`
 
 ``changes``
     change source, described in :doc:`cfg-changesources`
@@ -30,11 +32,14 @@ Available ``kind``\s are:
 ``steps``
     build steps, described in :doc:`cfg-buildsteps`
 
-``status``
-    status targets, described in :doc:`cfg-statustargets`
+``reporters``
+    reporters (or reporter targets), described in :doc:`cfg-reporters`
 
 ``util``
-    utility classes.  For example, :doc:`BuilderConfig <cfg-builders>`, :doc:`cfg-buildfactories`, :ref:`ChangeFilter <Change-Filters>` and :doc:`Locks <cfg-interlocks>` are accessible through ``util``.
+    utility classes.
+    For example, :doc:`BuilderConfig <cfg-builders>`, :doc:`cfg-buildfactories`, :ref:`ChangeFilter <Change-Filters>` and :doc:`Locks <cfg-interlocks>` are accessible through ``util``.
+
+Web interface plugins are not used directly: as described in :doc:`web server configuration <cfg-www>` section, they are listed in the corresponding section of the web server configuration dictionary.
 
 .. note::
 
@@ -45,14 +50,20 @@ Available ``kind``\s are:
     As a result, all listed above components will be available for use.
     This is what sample ``master.cfg`` file uses.
 
+Finding Plugins
+===============
+
+Buildbot maintains a list of plugins at http://trac.buildbot.net/wiki/Plugins.
+
 Developing Plugins
 ==================
 
-:ref:`Plugin-Module` contains all necesary information for you to develop new plugins.
+:ref:`Plugin-Module` contains all necessary information for you to develop new plugins.
+Please edit http://trac.buildbot.net/wiki/Plugins to add a link to your plugin!
 
 Plugins of note
 ===============
 
-Plugins were introduced in Buildbot-0.9.0, so as of this writing, only components that are bundled with Buildbot are available as plugins.
+Plugins were introduced in Buildbot-0.8.11, so as of this writing, only components that are bundled with Buildbot are available as plugins.
 
 If you have an idea/need about extending Buildbot, head to :doc:`../developer/plugins-publish`, create your own plugins and let the world now how Buildbot can be made even more useful.

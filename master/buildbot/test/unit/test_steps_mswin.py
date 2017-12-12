@@ -13,15 +13,21 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.status.results import EXCEPTION
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from buildbot.status.results import WARNINGS
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+
+from twisted.internet import defer
+from twisted.trial import unittest
+
+from buildbot.process.results import EXCEPTION
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
+from buildbot.process.results import WARNINGS
+from buildbot.process.results import Results
 from buildbot.steps import mswin
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import steps
-from twisted.internet import defer
-from twisted.trial import unittest
 
 
 class TestRobocopySimple(steps.BuildStepMixin, unittest.TestCase):
@@ -39,8 +45,7 @@ class TestRobocopySimple(steps.BuildStepMixin, unittest.TestCase):
     def _run_simple_test(self, source, destination, expected_args=None, expected_code=0, expected_res=SUCCESS, **kwargs):
         s = mswin.Robocopy(source, destination, **kwargs)
         self.setupStep(s)
-        self.assertEqual(s.describe(), ['???'])
-        self.assertEqual(s.describe(done=True), ['???'])
+        s.rendered = True
 
         command = ['robocopy', source, destination]
         if expected_args:
@@ -50,18 +55,13 @@ class TestRobocopySimple(steps.BuildStepMixin, unittest.TestCase):
             ExpectShell(
                 workdir='wkdir',
                 command=command,
-                usePTY="slave-config"
-            )
-            + expected_code
+            ) +
+            expected_code
         )
-        status_text = ["'robocopy", source, "...'"]
-        if expected_res == WARNINGS:
-            status_text.append('warnings')
-        elif expected_res == FAILURE:
-            status_text.append('failed')
-        elif expected_res == EXCEPTION:
-            status_text.append('exception')
-        self.expectOutcome(result=expected_res, status_text=status_text)
+        state_string = "'robocopy %s ...'" % source
+        if expected_res != SUCCESS:
+            state_string += ' (%s)' % (Results[expected_res])
+        self.expectOutcome(result=expected_res, state_string=state_string)
         return self.runStep()
 
     def test_copy(self):
@@ -110,6 +110,18 @@ class TestRobocopySimple(steps.BuildStepMixin, unittest.TestCase):
             r'D:\source', r'E:\dest', files=['blah*'],
             exclude_dirs=['foo', 'bar'],
             expected_args=['blah*', '/XD', 'foo', 'bar']
+        )
+
+    def test_custom_opts(self):
+        return self._run_simple_test(
+            r'D:\source', r'E:\dest', files=['*.foo'], custom_opts=['/R:10', '/W:60'],
+            expected_args=['*.foo', '/R:10', '/W:60']
+        )
+
+    def test_verbose_output(self):
+        return self._run_simple_test(
+            r'D:\source', r'E:\dest', files=['*.foo'], verbose=True,
+            expected_args=['*.foo', '/V', '/TS', '/FP']
         )
 
     @defer.inlineCallbacks

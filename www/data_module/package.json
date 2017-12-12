@@ -1,0 +1,21 @@
+{
+  "name": "buildbot-data-js",
+  "version": "1.0.10",
+  "description": "Buildbot AngularJS data module",
+  "readme": "README.md",
+  "author": "Andras Toth <andras.toth93@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/buildbot/buildbot-data-js.git"
+  },
+  "dependencies": {
+    "guanlecoja": "~0.8.3",
+    "gulp": "3.9.0",
+    "shelljs": "~0.5.3"
+  },
+  "engines": {
+    "node": ">=0.10.20",
+    "npm": ">=1.4.10"
+  },
+  "license": "MIT"
+}

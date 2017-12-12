@@ -13,11 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.db import enginestrategy
+from __future__ import absolute_import
+from __future__ import print_function
+
 from sqlalchemy.engine import url
 from sqlalchemy.pool import NullPool
+
 from twisted.python import runtime
 from twisted.trial import unittest
+
+from buildbot.db import enginestrategy
 
 
 class BuildbotEngineStrategy_special_cases(unittest.TestCase):
@@ -25,9 +30,10 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
     "Test the special case methods, without actually creating a db"
 
     # used several times below
-    mysql_kwargs = dict(basedir='my-base-dir',
-                        connect_args=dict(init_command='SET storage_engine=MyISAM'),
-                        pool_recycle=3600)
+    mysql_kwargs = dict(
+        basedir='my-base-dir',
+        connect_args=dict(init_command='SET default_storage_engine=MyISAM'),
+        pool_recycle=3600)
     sqlite_kwargs = dict(basedir='/my-base-dir', poolclass=NullPool)
 
     def setUp(self):
@@ -49,7 +55,7 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
         kwargs = dict(basedir='/my-base-dir')
         u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
         self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["sqlite:////my-base-dir/x/state.sqlite", None,
+                         ["sqlite:////my-base-dir/x/state.sqlite", 1,
                           self.sqlite_kwargs])
 
     def test_sqlite_relpath(self):
@@ -70,14 +76,14 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
         kwargs = dict(basedir=basedir)
         u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
         self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         [expected_url, None, exp_kwargs])
+                         [expected_url, 1, exp_kwargs])
 
     def test_sqlite_abspath(self):
         u = url.make_url("sqlite:////x/state.sqlite")
         kwargs = dict(basedir='/my-base-dir')
         u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
         self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["sqlite:////x/state.sqlite", None, self.sqlite_kwargs])
+                         ["sqlite:////x/state.sqlite", 1, self.sqlite_kwargs])
 
     def test_sqlite_memory(self):
         u = url.make_url("sqlite://")
@@ -86,8 +92,7 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
         self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
                          ["sqlite://", 1,  # only one conn at a time
                           dict(basedir='my-base-dir',
-                               # note: no poolclass= argument
-                               pool_size=1)])  # extra in-memory args
+                               connect_args=dict(check_same_thread=False))])
 
     def test_mysql_simple(self):
         u = url.make_url("mysql://host/dbname")
@@ -164,7 +169,8 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
         kwargs = dict(basedir='my-base-dir')
         u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
         exp = self.mysql_kwargs.copy()
-        exp['connect_args'] = dict(init_command='SET storage_engine=foo')
+        exp['connect_args'] = dict(
+            init_command='SET default_storage_engine=foo')
         self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
                          ["mysql:///dbname?charset=utf8&use_unicode=True", None,
                           exp])

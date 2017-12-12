@@ -13,14 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-import sys
-import twisted
+from __future__ import absolute_import
+from __future__ import print_function
 
-from buildbot.test.util.gpo import Expect
-from buildbot.test.util.gpo import GetProcessOutputMixin
+import sys
+
+import twisted
 from twisted.internet import utils
 from twisted.trial import reporter
 from twisted.trial import unittest
+
+from buildbot.test.util.gpo import Expect
+from buildbot.test.util.gpo import GetProcessOutputMixin
 
 
 class TestGPOMixin(unittest.TestCase):
@@ -46,9 +50,10 @@ class TestGPOMixin(unittest.TestCase):
     def assertTestFailure(self, result, expectedFailure):
         self.assertEqual(result.errors, [])
         self.assertEqual(len(result.failures), 1)
-        self.failUnless(result.failures[0][1].check(unittest.FailTest))
+        self.assertTrue(result.failures[0][1].check(unittest.FailTest))
         if expectedFailure:
-            self.assertSubstring(expectedFailure, result.failures[0][1].getErrorMessage())
+            self.assertSubstring(
+                expectedFailure, result.failures[0][1].getErrorMessage())
 
     def assertSuccessful(self, result):
         if not result.wasSuccessful():
@@ -58,10 +63,10 @@ class TestGPOMixin(unittest.TestCase):
                            result.failures[0][1].getErrorMessage())
             if result.errors:
                 output += ('\nerrors: %s' %
-                           map(lambda x: x[1].value, result.errors))
+                           [error[1].value for error in result.errors])
             raise self.failureException(output)
 
-        self.failUnless(result.wasSuccessful())
+        self.assertTrue(result.wasSuccessful())
 
     def test_patch(self):
         original_getProcessOutput = utils.getProcessOutput
@@ -83,14 +88,14 @@ class TestGPOMixin(unittest.TestCase):
     def test_methodChaining(self):
         expect = Expect('command')
         self.assertEqual(expect, expect.exit(0))
-        self.assertEqual(expect, expect.stdout("output"))
-        self.assertEqual(expect, expect.stderr("error"))
+        self.assertEqual(expect, expect.stdout(b"output"))
+        self.assertEqual(expect, expect.stderr(b"error"))
 
     def test_gpo_oneCommand(self):
         def method(testcase):
             testcase.expectCommands(Expect("command"))
             d = utils.getProcessOutput("command", ())
-            d.addCallback(self.assertEqual, '')
+            d.addCallback(self.assertEqual, b'')
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -101,7 +106,7 @@ class TestGPOMixin(unittest.TestCase):
             testcase.expectCommands(Expect("command"))
             testcase.expectCommands(Expect("command2"))
             d = utils.getProcessOutput("command", ())
-            d.addCallback(self.assertEqual, '')
+            d.addCallback(self.assertEqual, b'')
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -114,6 +119,8 @@ class TestGPOMixin(unittest.TestCase):
             return d
         result = self.runTestMethod(method)
         self.assertTestFailure(result, "unexpected command run")
+        # assert we have a meaningful message
+        self.assertTestFailure(result, "command2")
 
     def test_gpo_wrongArgs(self):
         def method(testcase):
@@ -153,17 +160,18 @@ class TestGPOMixin(unittest.TestCase):
 
     def test_gpo_errorOutput(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stderr("some test"))
-            d = testcase.assertFailure(utils.getProcessOutput("command", ()), [IOError])
+            testcase.expectCommands(Expect("command").stderr(b"some test"))
+            d = testcase.assertFailure(
+                utils.getProcessOutput("command", ()), [IOError])
             return d
         result = self.runTestMethod(method)
-        self.assertTestFailure(result, "got stderr: 'some test'")
+        self.assertTestFailure(result, "got stderr: " + repr(b'some test'))
 
     def test_gpo_errorOutput_errtoo(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stderr("some test"))
+            testcase.expectCommands(Expect("command").stderr(b"some test"))
             d = utils.getProcessOutput("command", (), errortoo=True)
-            d.addCallback(testcase.assertEqual, "some test")
+            d.addCallback(testcase.assertEqual, b"some test")
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
@@ -172,29 +180,30 @@ class TestGPOMixin(unittest.TestCase):
         def method(testcase):
             testcase.expectCommands(Expect("command").exit(1))
             d = utils.getProcessOutput("command", ())
-            d.addCallback(self.assertEqual, '')
+            d.addCallback(self.assertEqual, b'')
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
 
     def test_gpo_output(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stdout("stdout"))
+            testcase.expectCommands(Expect("command").stdout(b"stdout"))
             d = utils.getProcessOutput("command", ())
-            d.addCallback(testcase.assertEqual, "stdout")
+            d.addCallback(testcase.assertEqual, b"stdout")
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
 
     def test_gpo_outputAndError(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stdout("stdout").stderr("stderr"))
+            testcase.expectCommands(
+                Expect("command").stdout(b"stdout").stderr(b"stderr"))
             d = utils.getProcessOutput("command", (), errortoo=True)
 
             @d.addCallback
             def cb(res):
-                testcase.assertSubstring("stdout", res)
-                testcase.assertSubstring("stderr", res)
+                testcase.assertSubstring(b"stdout", res)
+                testcase.assertSubstring(b"stderr", res)
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
@@ -204,7 +213,7 @@ class TestGPOMixin(unittest.TestCase):
             testcase.expectCommands(Expect("command"))
             testcase.addGetProcessOutputExpectEnv({'key': 'value'})
             d = utils.getProcessOutput("command", (), env={'key': 'value'})
-            d.addCallback(self.assertEqual, '')
+            d.addCallback(self.assertEqual, b'')
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -214,10 +223,12 @@ class TestGPOMixin(unittest.TestCase):
         def method(testcase):
             testcase.expectCommands(Expect("command"))
             testcase.addGetProcessOutputExpectEnv({'key': 'value'})
-            d = utils.getProcessOutput("command", (), env={'key': 'wrongvalue'})
+            d = utils.getProcessOutput(
+                "command", (), env={'key': 'wrongvalue'})
             return d
         result = self.runTestMethod(method)
-        self.assertTestFailure(result, "Expected environment to have key = 'value'")
+        self.assertTestFailure(
+            result, "Expected environment to have key = 'value'")
 
     def test_gpo_environ_missing(self):
         def method(testcase):
@@ -226,13 +237,14 @@ class TestGPOMixin(unittest.TestCase):
             d = utils.getProcessOutput("command", ())
             return d
         result = self.runTestMethod(method)
-        self.assertTestFailure(result, "Expected environment to have key = 'value'")
+        self.assertTestFailure(
+            result, "Expected environment to have key = 'value'")
 
     def test_gpoav_oneCommand(self):
         def method(testcase):
             testcase.expectCommands(Expect("command"))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(self.assertEqual, ('', '', 0))
+            d.addCallback(self.assertEqual, (b'', b'', 0))
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -243,7 +255,7 @@ class TestGPOMixin(unittest.TestCase):
             testcase.expectCommands(Expect("command"))
             testcase.expectCommands(Expect("command2"))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(self.assertEqual, ('', '', 0))
+            d.addCallback(self.assertEqual, (b'', b'', 0))
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -279,7 +291,8 @@ class TestGPOMixin(unittest.TestCase):
     def test_gpoav_wrongPath(self):
         def method(testcase):
             testcase.expectCommands(Expect("command", "arg").path("/home"))
-            d = utils.getProcessOutputAndValue("command", ("otherarg",), path="/work")
+            d = utils.getProcessOutputAndValue(
+                "command", ("otherarg",), path="/work")
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -288,7 +301,8 @@ class TestGPOMixin(unittest.TestCase):
     def test_gpoav_notCurrentPath(self):
         def method(testcase):
             testcase.expectCommands(Expect("command", "arg"))
-            d = utils.getProcessOutputAndValue("command", ("otherarg",), path="/work")
+            d = utils.getProcessOutputAndValue(
+                "command", ("otherarg",), path="/work")
             d.addCallback(lambda _: testcase.assertAllCommandsRan())
             return d
         result = self.runTestMethod(method)
@@ -296,9 +310,9 @@ class TestGPOMixin(unittest.TestCase):
 
     def test_gpoav_errorOutput(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stderr("some test"))
+            testcase.expectCommands(Expect("command").stderr(b"some test"))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(self.assertEqual, ('', 'some test', 0))
+            d.addCallback(self.assertEqual, (b'', b'some test', 0))
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
@@ -307,25 +321,26 @@ class TestGPOMixin(unittest.TestCase):
         def method(testcase):
             testcase.expectCommands(Expect("command").exit(1))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(self.assertEqual, ('', '', 1))
+            d.addCallback(self.assertEqual, (b'', b'', 1))
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
 
     def test_gpoav_output(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stdout("stdout"))
+            testcase.expectCommands(Expect("command").stdout(b"stdout"))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(testcase.assertEqual, ("stdout", '', 0))
+            d.addCallback(testcase.assertEqual, (b"stdout", b'', 0))
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)
 
     def test_gpoav_outputAndError(self):
         def method(testcase):
-            testcase.expectCommands(Expect("command").stdout("stdout").stderr("stderr"))
+            testcase.expectCommands(
+                Expect("command").stdout(b"stdout").stderr(b"stderr"))
             d = utils.getProcessOutputAndValue("command", ())
-            d.addCallback(testcase.assertEqual, ("stdout", 'stderr', 0))
+            d.addCallback(testcase.assertEqual, (b"stdout", b'stderr', 0))
             return d
         result = self.runTestMethod(method)
         self.assertSuccessful(result)

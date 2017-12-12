@@ -13,12 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.python import log
 
-from buildbot.status.results import EXCEPTION
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from buildbot.status.results import WARNINGS
+from buildbot.process.results import EXCEPTION
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
+from buildbot.process.results import WARNINGS
 from buildbot.steps.shell import ShellCommand
 
 
@@ -29,7 +32,14 @@ class Robocopy(ShellCommand):
     This is just a wrapper around the standard shell command that
     will handle arguments and return codes accordingly for Robocopy.
     """
-    renderables = ['source', 'destination', 'files', 'exclude_files', 'exclude_dirs', 'custom_opts']
+    renderables = [
+        'custom_opts',
+        'destination',
+        'exclude_dirs',
+        'exclude_files',
+        'files',
+        'source'
+    ]
 
     # Robocopy exit flags (they are combined to make up the exit code)
     # See: http://ss64.com/nt/robocopy-exit.html
@@ -40,28 +50,25 @@ class Robocopy(ShellCommand):
     }
 
     def __init__(self, source, destination,
-                 files=None,
-                 recursive=False,
-                 mirror=False,
-                 move=False,
                  exclude=None,
                  exclude_files=None,
-                 exclude_dirs=None,
-                 custom_opts=None,
-                 verbose=False,
                  **kwargs):
         self.source = source
         self.destination = destination
-        self.files = files
-        self.recursive = recursive
-        self.mirror = mirror
-        self.move = move
+
+        self.files = kwargs.pop('files', None)
+        self.recursive = kwargs.pop('recursive', False)
+        self.mirror = kwargs.pop('mirror', False)
+        self.move = kwargs.pop('move', False)
+
         self.exclude_files = exclude_files
         if exclude and not exclude_files:
             self.exclude_files = exclude
-        self.exclude_dirs = exclude_dirs
-        self.custom_opts = custom_opts
-        self.verbose = verbose
+
+        self.exclude_dirs = kwargs.pop('exclude_dirs', None)
+        self.custom_opts = kwargs.pop('custom_opts', None)
+        self.verbose = kwargs.pop('verbose', False)
+
         ShellCommand.__init__(self, **kwargs)
 
     def start(self):
@@ -81,7 +88,7 @@ class Robocopy(ShellCommand):
             command.append('/XD')
             command += self.exclude_dirs
         if self.verbose:
-            command.append('/V /TS /FP')
+            command += ['/V', '/TS', '/FP']
         if self.custom_opts:
             command += self.custom_opts
         command += ['/TEE', '/NP']

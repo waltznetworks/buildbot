@@ -14,12 +14,12 @@
 # Copyright Buildbot Team Members
 
 from buildbot.config import ConfigErrors
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from buildbot.status.status_gerrit import GERRIT_LABEL_REVIEWED
-from buildbot.status.status_gerrit import GERRIT_LABEL_VERIFIED
-from buildbot.status.status_gerrit import GerritStatusPush
-from buildbot.status.status_gerrit import makeReviewResult
+from buildbot.reporters.gerrit import FAILURE
+from buildbot.reporters.gerrit import SUCCESS
+from buildbot.reporters.gerrit import GERRIT_LABEL_REVIEWED
+from buildbot.reporters.gerrit import GERRIT_LABEL_VERIFIED
+from buildbot.reporters.gerrit import GerritStatusPush
+from buildbot.reporters.gerrit import makeReviewResult
 from buildbot.test.fake import fakedb
 from buildbot.test.fake import fakemaster
 from buildbot.test.fake.fakebuild import FakeBuildStatus

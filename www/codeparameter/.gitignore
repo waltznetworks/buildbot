@@ -1,0 +1,6 @@
+# All files to globally ignore
+static/
+libs/
+.temp
+VERSION
+node_modules

@@ -13,15 +13,20 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from twisted.internet import defer
+
 from buildbot.db import state
 from buildbot.test.fake import fakedb
 from buildbot.test.util import connector_component
-from twisted.trial import unittest
+from buildbot.test.util import db
 
 
 class TestStateConnectorComponent(
     connector_component.ConnectorComponentMixin,
-        unittest.TestCase):
+        db.TestCase):
 
     def setUp(self):
         d = self.setUpConnectorComponent(
@@ -78,6 +83,23 @@ class TestStateConnectorComponent(
 
         def check(objectid):
             self.assertEqual(objectid, 27)
+        d.addCallback(check)
+        return d
+
+    def test_getObjectId_new_big_name(self):
+        d = self.db.state.getObjectId('someobj' * 150, 'someclass')
+        expn = 'someobj' * 9 + 's132bf9b89b0cdbc040d1ebc69e0dbee85dff720a'
+
+        def check(objectid):
+            self.assertNotEqual(objectid, None)
+
+            def thd(conn):
+                q = self.db.model.objects.select()
+                rows = conn.execute(q).fetchall()
+                self.assertEqual(
+                    [(r.id, r.name, r.class_name) for r in rows],
+                    [(objectid, expn, 'someclass')])
+            return self.db.pool.do(thd)
         d.addCallback(check)
         return d
 
@@ -190,3 +212,38 @@ class TestStateConnectorComponent(
             return self.db.pool.do(thd)
         d.addCallback(check)
         return d
+
+    @defer.inlineCallbacks
+    def test_atomicCreateState(self):
+        yield self.insertTestData([
+            fakedb.Object(id=10, name='-', class_name='-'),
+        ])
+        res = yield self.db.state.atomicCreateState(10, 'x', lambda: [1, 2])
+        self.assertEqual(res, [1, 2])
+        res = yield self.db.state.getState(10, 'x')
+        self.assertEqual(res, [1, 2])
+
+    @defer.inlineCallbacks
+    def test_atomicCreateState_conflict(self):
+        yield self.insertTestData([
+            fakedb.Object(id=10, name='-', class_name='-'),
+        ])
+
+        def hook(conn):
+            conn.execute(self.db.model.object_state.insert(),
+                         objectid=10, name='x', value_json='22')
+        self.db.state._test_timing_hook = hook
+
+        res = yield self.db.state.atomicCreateState(10, 'x', lambda: [1, 2])
+        self.assertEqual(res, 22)
+        res = yield self.db.state.getState(10, 'x')
+        self.assertEqual(res, 22)
+
+    @defer.inlineCallbacks
+    def test_atomicCreateState_nojsonable(self):
+        yield self.insertTestData([
+            fakedb.Object(id=10, name='-', class_name='-'),
+        ])
+
+        d = self.db.state.atomicCreateState(10, 'x', lambda: object())
+        yield self.assertFailure(d, TypeError)

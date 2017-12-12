@@ -13,18 +13,23 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import itervalues
+
+import os
 
 import mock
-import os
+
+from twisted.internet import defer
+from twisted.trial import unittest
 
 from buildbot.db import connector
 from buildbot.db import model
 from buildbot.scripts import create_master
 from buildbot.test.util import dirs
 from buildbot.test.util import misc
-from twisted.internet import defer
-from twisted.trial import unittest
+from buildbot.test.util import www
 
 
 def mkconfig(**kwargs):
@@ -51,7 +56,7 @@ class TestCreateMaster(misc.StdoutAssertionsMixin, unittest.TestCase):
         # mock out everything that createMaster calls, then check that
         # they are called, in order
         functions = ['makeBasedir', 'makeTAC', 'makeSampleConfig',
-                     'makePublicHtml', 'makeTemplatesDir', 'createDB']
+                     'createDB']
         repls = {}
         calls = []
         for fn in functions:
@@ -66,7 +71,7 @@ class TestCreateMaster(misc.StdoutAssertionsMixin, unittest.TestCase):
         def check(rc):
             self.assertEqual(rc, 0)
             self.assertEqual(calls, functions)
-            for repl in repls.values():
+            for repl in itervalues(repls):
                 repl.assert_called_with(config)
         return d
 
@@ -87,8 +92,8 @@ class TestCreateMaster(misc.StdoutAssertionsMixin, unittest.TestCase):
         return d
 
 
-class TestCreateMasterFunctions(dirs.DirsMixin, misc.StdoutAssertionsMixin,
-                                unittest.TestCase):
+class TestCreateMasterFunctions(www.WwwTestMixin, dirs.DirsMixin,
+                                misc.StdoutAssertionsMixin, unittest.TestCase):
 
     def setUp(self):
         self.setUpDirs('test')
@@ -99,12 +104,14 @@ class TestCreateMasterFunctions(dirs.DirsMixin, misc.StdoutAssertionsMixin,
         self.tearDownDirs()
 
     def assertInTacFile(self, str):
-        self.assertIn(str,
-                      open(os.path.join('test', 'buildbot.tac'), 'rt').read())
+        with open(os.path.join('test', 'buildbot.tac'), 'rt') as f:
+            content = f.read()
+        self.assertIn(str, content)
 
     def assertNotInTacFile(self, str):
-        self.assertNotIn(str,
-                         open(os.path.join('test', 'buildbot.tac'), 'rt').read())
+        with open(os.path.join('test', 'buildbot.tac'), 'rt') as f:
+            content = f.read()
+        self.assertNotIn(str, content)
 
     def assertDBSetup(self, basedir=None, db_url='sqlite:///state.sqlite',
                       verbose=True):
@@ -116,6 +123,7 @@ class TestCreateMasterFunctions(dirs.DirsMixin, misc.StdoutAssertionsMixin,
         self.patch(connector, 'DBConnector', self.DBConnector)
 
         basedir = basedir or self.basedir
+        # pylint: disable=unsubscriptable-object
         self.assertEqual(
             dict(basedir=self.DBConnector.call_args[0][1],
                  db_url=self.DBConnector.call_args[0][0].mkconfig.db['db_url'],
@@ -157,7 +165,8 @@ class TestCreateMasterFunctions(dirs.DirsMixin, misc.StdoutAssertionsMixin,
         self.assertWasQuiet()
 
     def test_makeTAC_no_logrotate(self):
-        create_master.makeTAC(mkconfig(basedir='test', **{'no-logrotate': True}))
+        create_master.makeTAC(
+            mkconfig(basedir='test', **{'no-logrotate': True}))
         self.assertNotInTacFile("import Log")
         self.assertWasQuiet()
 
@@ -220,18 +229,6 @@ class TestCreateMasterFunctions(dirs.DirsMixin, misc.StdoutAssertionsMixin,
                                                 quiet=True))
         with open(os.path.join('test', 'master.cfg.sample'), 'rt') as f:
             self.assertIn("XXYYZZ", f.read())
-        self.assertWasQuiet()
-
-    def test_makePublicHtml(self):
-        create_master.makePublicHtml(mkconfig(basedir='test', quiet=True))
-        self.assertTrue(os.path.exists(
-            os.path.join('test', 'public_html', 'robots.txt')))
-        self.assertWasQuiet()
-
-    def test_makeTemplatesDir(self):
-        create_master.makeTemplatesDir(mkconfig(basedir='test', quiet=True))
-        self.assertTrue(os.path.exists(
-            os.path.join('test', 'templates', 'README.txt')))
         self.assertWasQuiet()
 
     @defer.inlineCallbacks

@@ -3,18 +3,17 @@
 Build Factories
 ===============
 
-Each Builder is equipped with a ``build factory``, which is defines the steps used to perform that particular type of build.
+Each Builder is equipped with a ``build factory``, which defines the steps used to perform that particular type of build.
 This factory is created in the configuration file, and attached to a Builder through the ``factory`` element of its dictionary.
 
 The steps used by these builds are defined in the next section, :ref:`Build-Steps`.
 
 .. note::
-
-   Build factories are used with builders, and are not added directly to the buildmaster configuration dictionary.
+    Build factories are used with builders, and are not added directly to the buildmaster configuration dictionary.
 
 .. contents::
-   :depth: 1
-   :local:
+    :depth: 1
+    :local:
 
 .. _BuildFactory:
 
@@ -30,16 +29,16 @@ For example, a build factory which consists of an SVN checkout followed by a ``m
     from buildbot.plugins import util, steps
 
     f = util.BuildFactory()
-    f.addStep(steps.SVN(svnurl="http://..", mode="incremental"))
+    f.addStep(steps.SVN(repourl="http://..", mode="incremental"))
     f.addStep(steps.Compile(command=["make", "build"]))
 
 This factory would then be attached to one builder (or several, if desired)::
 
     c['builders'].append(
-        BuilderConfig(name='quick', slavenames=['bot1', 'bot2'], factory=f))
+        BuilderConfig(name='quick', workernames=['bot1', 'bot2'], factory=f))
 
 It is also possible to pass a list of steps into the :class:`BuildFactory` when it is created.
-Using :meth:`addStep` is usually simpler, but there are cases where is is more convenient to create the list of steps ahead of time, perhaps using some Python tricks to generate the steps.
+Using :meth:`addStep` is usually simpler, but there are cases where it is more convenient to create the list of steps ahead of time, perhaps using some Python tricks to generate the steps.
 
 ::
 
@@ -58,7 +57,9 @@ Finally, you can also add a sequence of steps all at once::
 Attributes
 ~~~~~~~~~~
 
-The following attributes can be set on a build factory after it is created, e.g.::
+The following attributes can be set on a build factory after it is created, e.g.,
+
+::
 
     f = util.BuildFactory()
     f.useProgress = False
@@ -71,8 +72,77 @@ The following attributes can be set on a build factory after it is created, e.g.
     (defaults to 'build'): workdir given to every build step created by this factory as default.
     The workdir can be overridden in a build step definition.
 
-    If this attribute is set to a string, that string will be used for constructing the workdir (buildslave base + builder builddir + workdir).
+    If this attribute is set to a string, that string will be used for constructing the workdir (worker base + builder builddir + workdir).
     The attribute can also be a Python callable, for more complex cases, as described in :ref:`Factory-Workdir-Functions`.
+
+.. _DynamicBuildFactories:
+
+Dynamic Build Factories
+------------------------
+
+In some cases you may not know what commands to run until after you checkout the source tree.
+For those cases you can dynamically add steps during a build from other steps.
+
+The :class:`Build` object provides 2 functions to do this:
+
+``addStepsAfterCurrentStep(self, step_factories)``
+    This adds the steps after the step that is currently executing.
+
+``addStepsAfterLastStep(self, step_factories)``
+    This adds the steps onto the end of the build.
+
+Both functions only accept as an argument a list of steps to add to the build.
+
+For example lets say you have a script checked in into your source tree called build.sh.
+When this script is called with the argument ``--list-stages`` it outputs a newline separated list of stage names.
+This can be used to generate at runtime a step for each stage in the build.
+Each stage is then run in this example using ``./build.sh --run-stage <stage name>``.
+
+::
+
+    from buildbot.plugins import util, steps
+    from buildbot.process import buildstep, logobserver
+    from twisted.internet import defer
+
+    class GenerateStagesCommand(buildstep.ShellMixin, steps.BuildStep):
+
+        def __init__(self, **kwargs):
+            kwargs = self.setupShellMixin(kwargs)
+            steps.BuildStep.__init__(self, **kwargs)
+            self.observer = logobserver.BufferLogObserver()
+            self.addLogObserver('stdio', self.observer)
+
+        def extract_stages(self, stdout):
+            stages = []
+            for line in stdout.split('\n'):
+                stage = str(line.strip())
+                if stage:
+                    stages.append(stage)
+            return stages
+
+        @defer.inlineCallbacks
+        def run(self):
+            # run './build.sh --list-stages' to generate the list of stages
+            cmd = yield self.makeRemoteShellCommand()
+            yield self.runCommand(cmd)
+
+            # if the command passes extract the list of stages
+            result = cmd.results()
+            if result == util.SUCCESS:
+                # create a ShellCommand for each stage and add them to the build
+                self.build.addStepsAfterCurrentStep([
+                    steps.ShellCommand(name=stage, command=["./build.sh", "--run-stage", stage])
+                    for stage in self.extract_stages(self.observer.getStdout())
+                ])
+
+            defer.returnValue(result)
+
+    f = util.BuildFactory()
+    f.addStep(steps.Git(repourl=repourl))
+    f.addStep(GenerateStagesCommand(
+        name="Generate build stages",
+        command=["./build.sh", "--list-stages"],
+        haltOnFailure=True))
 
 Predefined Build Factories
 --------------------------
@@ -110,7 +180,7 @@ The configuration environment variables, the configure flags, and command lines 
 
 Example::
 
-    f = util.GNUAutoconf(source=steps.SVN(svnurl=URL, mode="copy"),
+    f = util.GNUAutoconf(source=source.SVN(repourl=URL, mode="copy"),
                          flags=["--disable-nls"])
 
 Required Arguments:
@@ -127,7 +197,7 @@ Optional Arguments:
 
 ``configureEnv``
     The environment used for the initial configuration step.
-    This accepts a dictionary which will be merged into the buildslave's normal environment.
+    This accepts a dictionary which will be merged into the worker's normal environment.
     This is commonly used to provide things like ``CFLAGS="-O2 -g"`` (to turn off debug symbols during the compile).
     Defaults to an empty dictionary.
 
@@ -287,7 +357,7 @@ Trial
 .. py:class:: buildbot.process.factory.Trial
 
 Twisted provides a unit test tool named :command:`trial` which provides a few improvements over Python's built-in :mod:`unittest` module.
-Many python projects which use Twisted for their networking or application services also use trial for their unit tests.
+Many Python projects which use Twisted for their networking or application services also use trial for their unit tests.
 These modules are usually built and tested with something like the following:
 
 .. code-block:: bash
@@ -318,7 +388,7 @@ Arguments:
 ``testpath``
     Provides a directory to add to :envvar:`PYTHONPATH` when running the unit tests, if tests are being run.
     Defaults to ``.`` to include the project files in-place.
-    The generated build library is frequently architecture-dependent, but may simply be :file:`build/lib` for pure-python modules.
+    The generated build library is frequently architecture-dependent, but may simply be :file:`build/lib` for pure-Python modules.
 
 ``python``
     which Python executable to use.

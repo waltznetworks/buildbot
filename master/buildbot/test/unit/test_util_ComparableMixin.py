@@ -13,6 +13,8 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
 
 from twisted.trial import unittest
 
@@ -22,13 +24,13 @@ from buildbot import util
 class ComparableMixin(unittest.TestCase):
 
     class Foo(util.ComparableMixin):
-        compare_attrs = ["a", "b"]
+        compare_attrs = ("a", "b")
 
         def __init__(self, a, b, c):
             self.a, self.b, self.c = a, b, c
 
     class Bar(Foo, util.ComparableMixin):
-        compare_attrs = ["b", "c"]
+        compare_attrs = ("b", "c")
 
     def setUp(self):
         self.f123 = self.Foo(1, 2, 3)
@@ -66,11 +68,32 @@ class ComparableMixin(unittest.TestCase):
         # setting compare_attrs as an instance method doesn't
         # affect the outcome of the comparison
         another_f123 = self.Foo(1, 2, 3)
-        another_f123.compare_attrs = ["b", "a"]
+        another_f123.compare_attrs = ("b", "a")
         self.assertEqual(self.f123, another_f123)
 
     def test_ne_importantDifferences(self):
-        assert self.f123 != self.f134
+        self.assertNotEqual(self.f123, self.f134)
 
     def test_ne_differentClasses(self):
-        assert self.f123 != self.b123
+        self.assertNotEqual(self.f123, self.b123)
+
+    def test_compare(self):
+        self.assertEqual(self.f123, self.f123)
+        self.assertNotEqual(self.b223, self.b213)
+        self.assertGreater(self.b223, self.b213)
+
+        # Different classes
+        self.assertFalse(self.b223 > self.f123)
+
+        self.assertGreaterEqual(self.b223, self.b213)
+        self.assertGreaterEqual(self.b223, self.b223)
+
+        # Different classes
+        self.assertFalse(self.f123 >= self.b123)
+
+        self.assertLess(self.b213, self.b223)
+        self.assertLessEqual(self.b213, self.b223)
+        self.assertLessEqual(self.b213, self.b213)
+
+        # Different classes
+        self.assertFalse(self.f123 <= self.b123)

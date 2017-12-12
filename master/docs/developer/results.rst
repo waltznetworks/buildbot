@@ -3,11 +3,11 @@
 Build Result Codes
 ==================
 
-.. py:module:: buildbot.status.results
+.. py:module:: buildbot.process.results
 
 Buildbot represents the status of a step, build, or buildset using a set of
 numeric constants.  From Python, these constants are available in the module
-``buildbot.status.results``, but the values also appear in the database and in
+``buildbot.process.results``, but the values also appear in the database and in
 external tools, so the values are fixed.
 
 .. py:data:: SUCCESS
@@ -35,8 +35,12 @@ external tools, so the values are fixed.
 
 .. py:data:: RETRY
 
-    Value: 4; color: purple; a run that should be retried, usually due to a
-    slave disconnection.
+    Value: 5; color: purple; a run that should be retried, usually due to a
+    worker disconnection.
+
+.. py:data:: CANCELLED
+
+    Value: 6; color: pink; a run that was cancelled by the user.
 
 .. py:data:: Results
 
@@ -44,6 +48,28 @@ external tools, so the values are fixed.
 
 .. py:function:: worst_status(a, b)
 
-    This function takes two status values, and returns the "worst" status of
-    the two.  This is used (with exceptions) to aggregate step statuses into
-    build statuses, and build statuses into buildset statuses.
+    This function takes two status values, and returns the "worst" status of the two.
+    This is used to aggregate step statuses into build statuses, and build statuses into buildset statuses.
+
+.. py:function:: computeResultAndTermination(obj, result, previousResult):
+
+    :param obj: an object with the attributes of :py:class:`ResultComputingConfigMixin`
+    :param result: the new result
+    :param previousResult: the previous aggregated result
+
+    Building on :py:func:`worst_status`, this function determines what the aggregated overall status is, as well as whether the attempt should be terminated, based on the configuration in ``obj``.
+
+.. py:class:: ResultComputingConfigMixin
+
+    This simple mixin is intended to help implement classes that will use :py:meth:`computeResultAndTermination`.
+    The class has, as class attributes, the result computing configuration parameters with default values:
+
+    .. py:attribute:: haltOnFailure
+    .. py:attribute:: flunkOnWarnings
+    .. py:attribute:: flunkOnFailure
+    .. py:attribute:: warnOnWarnings
+    .. py:attribute:: warnOnFailure
+
+    The names of these attributes are available in the following attribute:
+
+    .. py:attribute:: resultConfig

@@ -13,6 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import text_type
+
 import os
 import time
 
@@ -22,8 +26,8 @@ from twisted.python import log
 
 from buildbot import config
 from buildbot.changes import base
+from buildbot.util import ascii2unicode
 from buildbot.util import deferredLocked
-from buildbot.util import epoch2datetime
 
 
 class HgPoller(base.PollingChangeSource):
@@ -31,9 +35,9 @@ class HgPoller(base.PollingChangeSource):
     """This source will poll a remote hg repo for changes and submit
     them to the change master."""
 
-    compare_attrs = ["repourl", "branch", "workdir",
+    compare_attrs = ("repourl", "branch", "workdir",
                      "pollInterval", "hgpoller", "usetimestamps",
-                     "category", "project", "pollAtLaunch"]
+                     "category", "project", "pollAtLaunch")
 
     db_class_name = 'HgPoller'
 
@@ -41,23 +45,27 @@ class HgPoller(base.PollingChangeSource):
                  workdir=None, pollInterval=10 * 60,
                  hgbin='hg', usetimestamps=True,
                  category=None, project='', pollinterval=-2,
-                 encoding='utf-8', pollAtLaunch=False):
+                 encoding='utf-8', name=None, pollAtLaunch=False):
 
         # for backward compatibility; the parameter used to be spelled with 'i'
         if pollinterval != -2:
             pollInterval = pollinterval
 
+        if name is None:
+            name = "%s[%s]" % (repourl, branch)
+
         self.repourl = repourl
         self.branch = branch
         base.PollingChangeSource.__init__(
-            self, name=repourl, pollInterval=pollInterval, pollAtLaunch=pollAtLaunch)
+            self, name=name, pollInterval=pollInterval, pollAtLaunch=pollAtLaunch)
         self.encoding = encoding
         self.lastChange = time.time()
         self.lastPoll = time.time()
         self.hgbin = hgbin
         self.workdir = workdir
         self.usetimestamps = usetimestamps
-        self.category = category
+        self.category = category if callable(
+            category) else ascii2unicode(category)
         self.project = project
         self.commitInfo = {}
         self.initLock = defer.DeferredLock()
@@ -100,9 +108,11 @@ class HgPoller(base.PollingChangeSource):
         d = utils.getProcessOutput(self.hgbin, args, path=self._absWorkdir(),
                                    env=os.environ, errortoo=False)
 
+        @d.addCallback
         def process(output):
             # all file names are on one line
-            date, author, files, comments = output.decode(self.encoding, "replace").split(
+            output = output.decode(self.encoding, "replace")
+            date, author, files, comments = output.split(
                 os.linesep, 3)
 
             if not self.usetimestamps:
@@ -110,13 +120,11 @@ class HgPoller(base.PollingChangeSource):
             else:
                 try:
                     stamp = float(date.split()[0])
-                except:
+                except Exception:
                     log.msg('hgpoller: caught exception converting output %r '
                             'to timestamp' % date)
                     raise
             return stamp, author.strip(), files.split(os.pathsep)[:-1], comments.strip()
-
-        d.addCallback(process)
         return d
 
     def _isRepositoryReady(self):
@@ -177,16 +185,16 @@ class HgPoller(base.PollingChangeSource):
         """
         d = self._getStateObjectId()
 
+        @d.addCallback
         def oid_cb(oid):
             d = self.master.db.state.getState(oid, 'current_rev', None)
 
+            @d.addCallback
             def addOid(cur):
                 if cur is not None:
                     return oid, int(cur)
                 return oid, cur
-            d.addCallback(addOid)
             return d
-        d.addCallback(oid_cb)
         return d
 
     def _setCurrentRev(self, rev, oid=None):
@@ -198,9 +206,9 @@ class HgPoller(base.PollingChangeSource):
         else:
             d = defer.succeed(oid)
 
+        @d.addCallback
         def set_in_state(obj_id):
             return self.master.db.state.setState(obj_id, 'current_rev', rev)
-        d.addCallback(set_in_state)
 
         return d
 
@@ -208,19 +216,21 @@ class HgPoller(base.PollingChangeSource):
         """Return a deferred for branch head revision or None.
 
         We'll get an error if there is no head for this branch, which is
-        proabably a good thing, since it's probably a mispelling
+        probably a good thing, since it's probably a mispelling
         (if really buildbotting a branch that does not have any changeset
         yet, one shouldn't be surprised to get errors)
         """
         d = utils.getProcessOutput(self.hgbin,
-                                   ['heads', self.branch, '--template={rev}' + os.linesep],
+                                   ['heads', self.branch,
+                                       '--template={rev}' + os.linesep],
                                    path=self._absWorkdir(), env=os.environ, errortoo=False)
 
+        @d.addErrback
         def no_head_err(exc):
             log.err("hgpoller: could not find branch %r in repository %r" % (
                 self.branch, self.repourl))
-        d.addErrback(no_head_err)
 
+        @d.addCallback
         def results(heads):
             if not heads:
                 return
@@ -236,15 +246,13 @@ class HgPoller(base.PollingChangeSource):
             # in case of whole reconstruction, are we sure that we'll get the
             # same node -> rev assignations ?
             return int(heads.strip())
-
-        d.addCallback(results)
         return d
 
     @defer.inlineCallbacks
     def _processChanges(self, unused_output):
         """Send info about pulled changes to the master and record current.
 
-        GitPoller does the recording by moving the working dir to the head
+        HgPoller does the recording by moving the working dir to the head
         of the branch.
         We don't update the tree (unnecessary treatment and waste of space)
         instead, we simply store the current rev number in a file.
@@ -253,9 +261,11 @@ class HgPoller(base.PollingChangeSource):
         oid, current = yield self._getCurrentRev()
         # hg log on a range of revisions is never empty
         # also, if a numeric revision does not exist, a node may match.
-        # Therefore, we have to check explicitely that branch head > current.
+        # Therefore, we have to check explicitly that branch head > current.
         head = yield self._getHead()
-        if head <= current:
+        if head is None:
+            return
+        elif current is not None and head <= current:
             return
         if current is None:
             # we could have used current = -1 convention as well (as hg does)
@@ -268,25 +278,26 @@ class HgPoller(base.PollingChangeSource):
                        r'--template={rev}:{node}\n']
         results = yield utils.getProcessOutput(self.hgbin, revListArgs,
                                                path=self._absWorkdir(), env=os.environ, errortoo=False)
+        results = results.decode(self.encoding)
 
-        revNodeList = [rn.split(':', 1) for rn in results.strip().split()]
+        revNodeList = [rn.split(u':', 1) for rn in results.strip().split()]
 
         log.msg('hgpoller: processing %d changes: %r in %r'
                 % (len(revNodeList), revNodeList, self._absWorkdir()))
         for rev, node in revNodeList:
             timestamp, author, files, comments = yield self._getRevDetails(
                 node)
-            yield self.master.addChange(
+            yield self.master.data.updates.addChange(
                 author=author,
-                revision=node,
+                revision=text_type(node),
                 files=files,
                 comments=comments,
-                when_timestamp=epoch2datetime(timestamp),
-                branch=self.branch,
-                category=self.category,
-                project=self.project,
-                repository=self.repourl,
-                src='hg')
+                when_timestamp=int(timestamp) if timestamp else None,
+                branch=ascii2unicode(self.branch),
+                category=ascii2unicode(self.category),
+                project=ascii2unicode(self.project),
+                repository=ascii2unicode(self.repourl),
+                src=u'hg')
             # writing after addChange so that a rev is never missed,
             # but at once to avoid impact from later errors
             yield self._setCurrentRev(rev, oid=oid)
@@ -294,14 +305,16 @@ class HgPoller(base.PollingChangeSource):
     def _processChangesFailure(self, f):
         log.msg('hgpoller: repo poll failed')
         log.err(f)
-        # eat the failure to continue along the deferred chain - we still want to catch up
+        # eat the failure to continue along the deferred chain - we still want
+        # to catch up
         return None
 
     def _convertNonZeroToFailure(self, res):
         "utility method to handle the result of getProcessOutputAndValue"
         (stdout, stderr, code) = res
         if code != 0:
-            raise EnvironmentError('command failed with exit code %d: %s' % (code, stderr))
+            raise EnvironmentError(
+                'command failed with exit code %d: %s' % (code, stderr))
         return (stdout, stderr, code)
 
     def _stopOnFailure(self, f):

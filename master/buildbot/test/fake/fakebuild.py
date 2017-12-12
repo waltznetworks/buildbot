@@ -13,25 +13,57 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import itervalues
+
 import posixpath
+
+import mock
+
+from twisted.python import components
 
 from buildbot import config
 from buildbot import interfaces
 from buildbot.process import factory
 from buildbot.process import properties
+from buildbot.process import workerforbuilder
 from buildbot.test.fake import fakemaster
-from twisted.python import components
+from buildbot.worker import base
 
 
-class FakeBuildStatus(properties.PropertiesMixin, mock.Mock):
+class FakeBuildStatus(properties.PropertiesMixin, object):
 
-    # work around http://code.google.com/p/mock/issues/detail?id=105
-    def _get_child_mock(self, **kw):
-        return mock.Mock(**kw)
+    def __init__(self):
+        self.properties = properties.Properties()
 
     def getInterestedUsers(self):
         return []
+
+    def setWorkername(self, _):
+        pass
+
+    def setSourceStamps(self, _):
+        pass
+
+    def setReason(self, _):
+        pass
+
+    def setBlamelist(self, _):
+        pass
+
+    def buildStarted(self, _):
+        return True
+
+    setText = mock.Mock()
+    setText2 = mock.Mock()
+    setResults = mock.Mock()
+
+    def buildFinished(self):
+        pass
+
+    getBuilder = mock.Mock()
+
 
 components.registerAdapter(
     lambda build_status: build_status.properties,
@@ -43,23 +75,46 @@ class FakeBuild(properties.PropertiesMixin):
     def __init__(self, props=None, master=None):
         self.build_status = FakeBuildStatus()
         self.builder = fakemaster.FakeBuilderStatus(master)
+        self.workerforbuilder = mock.Mock(
+            spec=workerforbuilder.WorkerForBuilder)
+        self.workerforbuilder.worker = mock.Mock(spec=base.Worker)
         self.builder.config = config.BuilderConfig(
             name='bldr',
-            slavenames=['a'],
+            workernames=['a'],
             factory=factory.BuildFactory())
         self.path_module = posixpath
+        self.buildid = 92
+        self.number = 13
         self.workdir = 'build'
+        self.locks = []
 
         self.sources = {}
         if props is None:
             props = properties.Properties()
         props.build = self
         self.build_status.properties = props
+        self.properties = props
+        self.master = None
 
     def getSourceStamp(self, codebase):
         if codebase in self.sources:
             return self.sources[codebase]
         return None
+
+    def getAllSourceStamps(self):
+        return list(itervalues(self.sources))
+
+    def allChanges(self):
+        for s in itervalues(self.sources):
+            for c in s.changes:
+                yield c
+
+    def allFiles(self):
+        files = []
+        for c in self.allChanges():
+            for f in c.files:
+                files.append(f)
+        return files
 
     def getBuilder(self):
         return self.builder

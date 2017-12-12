@@ -13,20 +13,24 @@
 #
 # Copyright Buildbot Team Members
 
-import os.path
+from __future__ import absolute_import
+from __future__ import print_function
 
-from buildbot.status.results import FAILURE
-from buildbot.status.results import RETRY
-from buildbot.status.results import SUCCESS
+import os
+
+from twisted.internet import error
+from twisted.python.reflect import namedModule
+from twisted.trial import unittest
+
+from buildbot.process import remotetransfer
+from buildbot.process.results import FAILURE
+from buildbot.process.results import RETRY
+from buildbot.process.results import SUCCESS
 from buildbot.steps.source import bzr
-from buildbot.steps.transfer import _FileReader
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectRemoteRef
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import sourcesteps
-from twisted.internet import error
-from twisted.python.reflect import namedModule
-from twisted.trial import unittest
 
 
 class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
@@ -63,7 +67,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS, state_string="update")
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -94,7 +98,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         return self.runStep()
 
     def test_mode_full_timeout(self):
@@ -127,7 +131,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -158,7 +162,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -188,7 +192,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -223,7 +227,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -248,12 +252,64 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                         command=['bzr', 'update'])
             + 0,
             Expect('downloadFile', dict(blocksize=16384, maxsize=None,
-                                        reader=ExpectRemoteRef(_FileReader),
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.FileReader),
+                                        workerdest='.buildbot-diff', workdir='wkdir',
+                                        mode=None))
+            + 0,
+            Expect('downloadFile', dict(blocksize=16384, maxsize=None,
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.FileReader),
+                                        workerdest='.buildbot-patched', workdir='wkdir',
+                                        mode=None))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['patch', '-p1', '--remove-empty-files',
+                                 '--force', '--forward', '-i', '.buildbot-diff'])
+            + 0,
+            Expect('rmdir', dict(dir='wkdir/.buildbot-diff',
+                                 logEnviron=True))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['bzr', 'version-info', '--custom', "--template='{revno}"])
+            + ExpectShell.log('stdio',
+                              stdout='100')
+            + 0,
+        )
+        self.expectOutcome(result=SUCCESS)
+        self.expectProperty('got_revision', '100', 'Bzr')
+        return self.runStep()
+
+    def test_mode_full_clean_patch_worker_2_16(self):
+        self.setupStep(
+            bzr.Bzr(repourl='http://bzr.squid-cache.org/bzr/squid3/trunk',
+                    mode='full', method='clean'), patch=(1, 'patch'),
+            worker_version={'*': '2.16'})
+        self.expectCommands(
+            ExpectShell(workdir='wkdir',
+                        command=['bzr', '--version'])
+            + 0,
+            Expect('stat', dict(file='wkdir/.buildbot-patched',
+                                logEnviron=True))
+            + 1,
+            Expect('stat', dict(file='wkdir/.bzr',
+                                logEnviron=True))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['bzr', 'clean-tree', '--ignored', '--force'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['bzr', 'update'])
+            + 0,
+            Expect('downloadFile', dict(blocksize=16384, maxsize=None,
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.FileReader),
                                         slavedest='.buildbot-diff', workdir='wkdir',
                                         mode=None))
             + 0,
             Expect('downloadFile', dict(blocksize=16384, maxsize=None,
-                                        reader=ExpectRemoteRef(_FileReader),
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.FileReader),
                                         slavedest='.buildbot-patched', workdir='wkdir',
                                         mode=None))
             + 0,
@@ -262,7 +318,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '--force', '--forward', '-i', '.buildbot-diff'])
             + 0,
             Expect('rmdir', dict(dir='wkdir/.buildbot-diff',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'version-info', '--custom', "--template='{revno}"])
@@ -270,7 +326,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -301,7 +357,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -331,7 +387,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -347,7 +403,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -359,7 +415,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -375,21 +431,21 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
                                  'http://bzr.squid-cache.org/bzr/squid3/trunk', '.'])
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
                                  'http://bzr.squid-cache.org/bzr/squid3/trunk', '.'])
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -401,7 +457,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -418,7 +474,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -431,7 +487,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -447,7 +503,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -459,7 +515,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -476,7 +532,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -488,7 +544,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -504,7 +560,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('rmdir', dict(dir='build',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             Expect('stat', dict(file='source/.bzr',
                                 logEnviron=True))
@@ -522,7 +578,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -549,7 +605,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -577,7 +633,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100', 'Bzr')
         return self.runStep()
 
@@ -605,7 +661,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100\n')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100\n', 'Bzr')
         return self.runStep()
 
@@ -628,7 +684,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  'http://bzr.squid-cache.org/bzr/squid3/trunk', '.'])
             + 1,
             Expect('rmdir', dict(dir='wkdir',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['bzr', 'checkout',
@@ -640,7 +696,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='100\n')
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '100\n', 'Bzr')
         return self.runStep()
 
@@ -668,7 +724,7 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stdout='oiasdfj010laksjfd')
             + 0,
         )
-        self.expectOutcome(result=FAILURE, status_text=["updating"])
+        self.expectOutcome(result=FAILURE)
         return self.runStep()
 
     def test_bad_checkout(self):
@@ -692,10 +748,10 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
                               stderr='failed\n')
             + 128,
         )
-        self.expectOutcome(result=FAILURE, status_text=["updating"])
+        self.expectOutcome(result=FAILURE)
         return self.runStep()
 
-    def test_slave_connection_lost(self):
+    def test_worker_connection_lost(self):
         self.setupStep(
             bzr.Bzr(repourl='http://bzr.squid-cache.org/bzr/squid3/trunk',
                     mode='full', method='fresh'))
@@ -705,5 +761,5 @@ class TestBzr(sourcesteps.SourceStepMixin, unittest.TestCase):
             + ('err', error.ConnectionLost()),
         )
         self.expectOutcome(result=RETRY,
-                           status_text=["update", "exception", "slave", "lost"])
+                           state_string="update (retry)")
         return self.runStep()

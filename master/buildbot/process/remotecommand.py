@@ -13,20 +13,33 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import interfaces
-from buildbot import util
-from buildbot.process import metrics
-from buildbot.status.results import FAILURE
-from buildbot.status.results import SUCCESS
-from buildbot.util.eventual import eventually
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import iteritems
+from future.utils import text_type
+
 from twisted.internet import defer
 from twisted.internet import error
 from twisted.python import log
 from twisted.python.failure import Failure
 from twisted.spread import pb
 
+from buildbot import util
+from buildbot.pbutil import decode
+from buildbot.process import metrics
+from buildbot.process.results import FAILURE
+from buildbot.process.results import SUCCESS
+from buildbot.util.eventual import eventually
+from buildbot.worker.protocols import base
+from buildbot.worker_transition import WorkerAPICompatMixin
+from buildbot.worker_transition import reportDeprecatedWorkerNameUsage
 
-class RemoteCommand(pb.Referenceable):
+
+class RemoteException(Exception):
+    pass
+
+
+class RemoteCommand(base.RemoteCommandImpl, WorkerAPICompatMixin):
 
     # class-level unique identifier generator for command ids
     _commandCounter = 0
@@ -36,8 +49,10 @@ class RemoteCommand(pb.Referenceable):
     debug = False
 
     def __init__(self, remote_command, args, ignore_updates=False,
-                 collectStdout=False, collectStderr=False, decodeRC={0: SUCCESS},
+                 collectStdout=False, collectStderr=False, decodeRC=None,
                  stdioLogName='stdio'):
+        if decodeRC is None:
+            decodeRC = {0: SUCCESS}
         self.logs = {}
         self.delayedLogs = {}
         self._closeWhenFinished = {}
@@ -53,14 +68,26 @@ class RemoteCommand(pb.Referenceable):
         self.args = args
         self.ignore_updates = ignore_updates
         self.decodeRC = decodeRC
+        self.conn = None
+        self.worker = None
+        self._registerOldWorkerAttr("worker", name="buildslave")
+        self.step = None
+        self.builder_name = None
+        self.commandID = None
+        self.deferred = None
+        # a lock to make sure that only one log-handling method runs at a time.
+        # This is really only a problem with old-style steps, which do not
+        # wait for the Deferred from one method before invoking the next.
+        self.loglock = defer.DeferredLock()
 
     def __repr__(self):
         return "<RemoteCommand '%s' at %d>" % (self.remote_command, id(self))
 
-    def run(self, step, remote):
+    def run(self, step, conn, builder_name):
         self.active = True
         self.step = step
-        self.remote = remote
+        self.conn = conn
+        self.builder_name = builder_name
 
         # generate a new command id
         cmd_id = RemoteCommand._commandCounter
@@ -75,7 +102,7 @@ class RemoteCommand(pb.Referenceable):
         # _finished is called with an error for unknown commands, errors
         # that occur while the command is starting (including OSErrors in
         # exec()), StaleBroker (when the connection was lost before we
-        # started), and pb.PBConnectionLost (when the slave isn't responding
+        # started), and pb.PBConnectionLost (when the worker isn't responding
         # over this connection, perhaps it had a power failure, or NAT
         # weirdness). If this happens, self.deferred is fired right away.
         d.addErrback(self._finished)
@@ -84,13 +111,14 @@ class RemoteCommand(pb.Referenceable):
         # when our parent Step calls our .lostRemote() method.
         return self.deferred
 
-    def useLog(self, log, closeWhenFinished=False, logfileName=None):
-        assert interfaces.ILogFile.providedBy(log)
+    def useLog(self, log_, closeWhenFinished=False, logfileName=None):
+        # NOTE: log may be a SyngLogFileWrapper or a Log instance, depending on
+        # the step
         if not logfileName:
-            logfileName = log.getName()
+            logfileName = log_.getName()
         assert logfileName not in self.logs
         assert logfileName not in self.delayedLogs
-        self.logs[logfileName] = log
+        self.logs[logfileName] = log_
         self._closeWhenFinished[logfileName] = closeWhenFinished
 
     def useLogDelayed(self, logfileName, activateCallBack, closeWhenFinished=False):
@@ -100,13 +128,13 @@ class RemoteCommand(pb.Referenceable):
 
     def _start(self):
         self._startTime = util.now()
-
         # This method only initiates the remote command.
         # We will receive remote_update messages as the command runs.
         # We will get a single remote_complete when it finishes.
         # We should fire self.deferred when the command is done.
-        d = self.remote.callRemote("startCommand", self, self.commandID,
-                                   self.remote_command, self.args)
+        d = self.conn.remoteStartCommand(self, self.builder_name,
+                                         self.commandID, self.remote_command,
+                                         self.args)
         return d
 
     def _finished(self, failure=None):
@@ -129,21 +157,21 @@ class RemoteCommand(pb.Referenceable):
         if not self.active:
             log.msg(" but this RemoteCommand is already inactive")
             return defer.succeed(None)
-        if not self.remote:
-            log.msg(" but our .remote went away")
+        if not self.conn:
+            log.msg(" but our .conn went away")
             return defer.succeed(None)
         if isinstance(why, Failure) and why.check(error.ConnectionLost):
-            log.msg("RemoteCommand.disconnect: lost slave")
-            self.remote = None
+            log.msg("RemoteCommand.disconnect: lost worker")
+            self.conn = None
             self._finished(why)
             return defer.succeed(None)
 
         # tell the remote command to halt. Returns a Deferred that will fire
         # when the interrupt command has been delivered.
 
-        d = defer.maybeDeferred(self.remote.callRemote, "interruptCommand",
-                                self.commandID, str(why))
-        # the slave may not have remote_interruptCommand
+        d = self.conn.remoteInterruptCommand(self.builder_name,
+                                             self.commandID, str(why))
+        # the worker may not have remote_interruptCommand
         d.addErrback(self._interruptFailed)
         return d
 
@@ -155,21 +183,23 @@ class RemoteCommand(pb.Referenceable):
 
     def remote_update(self, updates):
         """
-        I am called by the slave's L{buildbot.slave.bot.SlaveBuilder} so
+        I am called by the worker's
+        L{buildbot_worker.base.WorkerForBuilderBase.sendUpdate} so
         I can receive updates from the running remote command.
 
         @type  updates: list of [object, int]
         @param updates: list of updates from the remote command
         """
-        self.buildslave.messageReceivedFromSlave()
+        updates = decode(updates)
+        self.worker.messageReceivedFromWorker()
         max_updatenum = 0
         for (update, num) in updates:
             # log.msg("update[%d]:" % num)
             try:
                 if self.active and not self.ignore_updates:
                     self.remoteUpdate(update)
-            except:
-                # log failure, terminate build, let slave retire the update
+            except Exception:
+                # log failure, terminate build, let worker retire the update
                 self._finished(Failure())
                 # TODO: what if multiple updates arrive? should
                 # skip the rest but ack them all
@@ -179,76 +209,98 @@ class RemoteCommand(pb.Referenceable):
 
     def remote_complete(self, failure=None):
         """
-        Called by the slave's L{buildbot.slave.bot.SlaveBuilder} to
+        Called by the worker's
+        L{buildbot_worker.base.WorkerForBuilderBase.commandComplete} to
         notify me the remote command has finished.
 
         @type  failure: L{twisted.python.failure.Failure} or None
 
         @rtype: None
         """
-        self.buildslave.messageReceivedFromSlave()
+        self.worker.messageReceivedFromWorker()
         # call the real remoteComplete a moment later, but first return an
-        # acknowledgement so the slave can retire the completion message.
+        # acknowledgement so the worker can retire the completion message.
         if self.active:
             eventually(self._finished, failure)
         return None
 
+    def _unwrap(self, log):
+        from buildbot.process import buildstep
+        if isinstance(log, buildstep.SyncLogFileWrapper):
+            return log.unwrap()
+        return log
+
+    @util.deferredLocked('loglock')
+    @defer.inlineCallbacks
     def addStdout(self, data):
-        if self.stdioLogName is not None and self.stdioLogName in self.logs:
-            self.logs[self.stdioLogName].addStdout(data)
         if self.collectStdout:
             self.stdout += data
-        return defer.succeed(None)
-
-    def addStderr(self, data):
         if self.stdioLogName is not None and self.stdioLogName in self.logs:
-            self.logs[self.stdioLogName].addStderr(data)
+            log_ = yield self._unwrap(self.logs[self.stdioLogName])
+            log_.addStdout(data)
+
+    @util.deferredLocked('loglock')
+    @defer.inlineCallbacks
+    def addStderr(self, data):
         if self.collectStderr:
             self.stderr += data
-        return defer.succeed(None)
+        if self.stdioLogName is not None and self.stdioLogName in self.logs:
+            log_ = yield self._unwrap(self.logs[self.stdioLogName])
+            log_.addStderr(data)
 
+    @util.deferredLocked('loglock')
+    @defer.inlineCallbacks
     def addHeader(self, data):
         if self.stdioLogName is not None and self.stdioLogName in self.logs:
-            self.logs[self.stdioLogName].addHeader(data)
-        return defer.succeed(None)
+            log_ = yield self._unwrap(self.logs[self.stdioLogName])
+            log_.addHeader(data)
 
+    @util.deferredLocked('loglock')
+    @defer.inlineCallbacks
     def addToLog(self, logname, data):
         # Activate delayed logs on first data.
         if logname in self.delayedLogs:
             (activateCallBack, closeWhenFinished) = self.delayedLogs[logname]
             del self.delayedLogs[logname]
-            loog = activateCallBack(self)
+            loog = yield activateCallBack(self)
+            loog = yield self._unwrap(loog)
             self.logs[logname] = loog
             self._closeWhenFinished[logname] = closeWhenFinished
 
         if logname in self.logs:
-            self.logs[logname].addStdout(data)
+            log_ = yield self._unwrap(self.logs[logname])
+            yield log_.addStdout(data)
         else:
             log.msg("%s.addToLog: no such log %s" % (self, logname))
-        return defer.succeed(None)
 
     @metrics.countMethod('RemoteCommand.remoteUpdate()')
+    @defer.inlineCallbacks
     def remoteUpdate(self, update):
+        def cleanup(data):
+            if self.step is None:
+                return data
+            return self.step.build.properties.cleanupTextFromSecrets(data)
+
         if self.debug:
-            for k, v in update.items():
+            for k, v in iteritems(update):
                 log.msg("Update[%s]: %s" % (k, v))
         if "stdout" in update:
             # 'stdout': data
-            self.addStdout(update['stdout'])
+            yield self.addStdout(cleanup(update['stdout']))
         if "stderr" in update:
             # 'stderr': data
-            self.addStderr(update['stderr'])
+            yield self.addStderr(cleanup(update['stderr']))
         if "header" in update:
             # 'header': data
-            self.addHeader(update['header'])
+            yield self.addHeader(cleanup(update['header']))
         if "log" in update:
             # 'log': (logname, data)
             logname, data = update['log']
-            self.addToLog(logname, data)
+            yield self.addToLog(logname, cleanup(data))
         if "rc" in update:
             rc = self.rc = update['rc']
             log.msg("%s rc=%s" % (self, rc))
-            self.addHeader("program finished with exit code %d\n" % rc)
+            yield self.addHeader("program finished with exit code %d\n" % rc)
         if "elapsed" in update:
             self._remoteElapsed = update['elapsed']
 
@@ -259,19 +311,29 @@ class RemoteCommand(pb.Referenceable):
                     self.updates[k] = []
                 self.updates[k].append(update[k])
 
+    @util.deferredLocked('loglock')
+    @defer.inlineCallbacks
     def remoteComplete(self, maybeFailure):
         if self._startTime and self._remoteElapsed:
             delta = (util.now() - self._startTime) - self._remoteElapsed
             metrics.MetricTimeEvent.log("RemoteCommand.overhead", delta)
 
-        for name, loog in self.logs.items():
+        for name, loog in iteritems(self.logs):
             if self._closeWhenFinished[name]:
                 if maybeFailure:
-                    loog.addHeader("\nremoteFailed: %s" % maybeFailure)
+                    loog = yield self._unwrap(loog)
+                    yield loog.addHeader("\nremoteFailed: %s" % maybeFailure)
                 else:
                     log.msg("closing log %s" % loog)
                 loog.finish()
-        return maybeFailure
+        if maybeFailure:
+            # workaround http://twistedmatrix.com/trac/ticket/5507
+            # CopiedFailure cannot be raised back, this make debug difficult
+            if isinstance(maybeFailure, pb.CopiedFailure):
+                maybeFailure.value = RemoteException("%s: %s\n%s" % (
+                    maybeFailure.type, maybeFailure.value, maybeFailure.traceback))
+                maybeFailure.type = RemoteException
+            maybeFailure.raiseException()
 
     def results(self):
         if self.rc in self.decodeRC:
@@ -280,6 +342,8 @@ class RemoteCommand(pb.Referenceable):
 
     def didFail(self):
         return self.results() == FAILURE
+
+
 LoggedRemoteCommand = RemoteCommand
 
 
@@ -288,14 +352,17 @@ class RemoteShellCommand(RemoteCommand):
     def __init__(self, workdir, command, env=None,
                  want_stdout=1, want_stderr=1,
                  timeout=20 * 60, maxTime=None, sigtermTime=None,
-                 logfiles={}, usePTY="slave-config", logEnviron=True,
+                 logfiles=None, usePTY=None, logEnviron=True,
                  collectStdout=False, collectStderr=False,
                  interruptSignal=None,
-                 initialStdin=None, decodeRC={0: SUCCESS},
+                 initialStdin=None, decodeRC=None,
                  stdioLogName='stdio'):
-
+        if logfiles is None:
+            logfiles = {}
+        if decodeRC is None:
+            decodeRC = {0: SUCCESS}
         self.command = command  # stash .command, set it later
-        if isinstance(self.command, basestring):
+        if isinstance(self.command, (text_type, bytes)):
             # Single string command doesn't support obfuscation.
             self.fake_command = command
         else:
@@ -303,15 +370,21 @@ class RemoteShellCommand(RemoteCommand):
             def obfuscate(arg):
                 if isinstance(arg, tuple) and len(arg) == 3 and arg[0] == 'obfuscated':
                     return arg[2]
-                else:
-                    return arg
-            self.fake_command = map(obfuscate, self.command)
+                return arg
+            self.fake_command = [obfuscate(c) for c in self.command]
 
         if env is not None:
             # avoid mutating the original master.cfg dictionary. Each
             # ShellCommand gets its own copy, any start() methods won't be
             # able to modify the original.
             env = env.copy()
+
+        if usePTY == 'slave-config':
+            reportDeprecatedWorkerNameUsage(
+                "'slave-config' value of 'usePTY' attribute is deprecated, "
+                "use None instead.")
+            usePTY = None
+
         args = {'workdir': workdir,
                 'env': env,
                 'want_stdout': want_stdout,
@@ -332,13 +405,22 @@ class RemoteShellCommand(RemoteCommand):
                                stdioLogName=stdioLogName)
 
     def _start(self):
+        if self.args['usePTY'] is None:
+            if self.step.workerVersionIsOlderThan("shell", "3.0"):
+                # Old worker default of usePTY is to use worker-configuration.
+                self.args['usePTY'] = "slave-config"
+            else:
+                # buildbot-worker doesn't support worker-configured usePTY,
+                # and usePTY defaults to False.
+                self.args['usePTY'] = False
+
         self.args['command'] = self.command
         if self.remote_command == "shell":
-            # non-ShellCommand slavecommands are responsible for doing this
+            # non-ShellCommand worker commands are responsible for doing this
             # fixup themselves
-            if self.step.slaveVersion("shell", "old") == "old":
+            if self.step.workerVersion("shell", "old") == "old":
                 self.args['dir'] = self.args['workdir']
-            if self.step.slaveVersionIsOlderThan("shell", "2.16"):
+            if self.step.workerVersionIsOlderThan("shell", "2.16"):
                 self.args.pop('sigtermTime', None)
         what = "command '%s' in dir '%s'" % (self.fake_command,
                                              self.args['workdir'])

@@ -9,18 +9,7 @@ It is intended both for developers writing patches that will be included in Buil
 .. toctree::
     :maxdepth: 2
 
-    master-overview
-    definitions
-    style
-    tests
-    config
-    utils
-    database
-    results
-    formats
-    webstatus
-    master-slave
-    encodings
-    metrics
-    plugins-publish
+    general
+    apis
+    py3-compat
     classes

@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import calendar
 import time
 
@@ -21,9 +24,8 @@ def fixed_mktime_tz(data):
     if data[9] is None:
         # No zone info, so localtime is better assumption than GMT
         return time.mktime(data[:8] + (-1,))
-    else:
-        t = calendar.timegm(data)
-        return t - data[9]
+    t = calendar.timegm(data)
+    return t - data[9]
 
 
 def patch():

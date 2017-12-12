@@ -17,22 +17,32 @@
 Buildbot plugin infrastructure
 """
 
-from buildbot.plugins.db import get_plugins
-from buildbot.interfaces import IBuildSlave
+from buildbot import statistics
 from buildbot.interfaces import IBuildStep
 from buildbot.interfaces import IChangeSource
 from buildbot.interfaces import IScheduler
-from buildbot.interfaces import IStatusReceiver
+from buildbot.interfaces import IWorker
+from buildbot.plugins.db import get_plugins
 
-
-__all__ = ['changes', 'schedulers', 'buildslave', 'steps', 'status', 'util']
+__all__ = [
+    'changes', 'schedulers', 'steps', 'util', 'reporters', 'statistics',
+    'worker', 'secrets', 'webhooks',
+    'buildslave',  # deprecated, use 'worker' instead.
+]
 
 
 # Names here match the names of the corresponding Buildbot module, hence
 # 'changes', 'schedulers', but 'buildslave'
 changes = get_plugins('changes', IChangeSource)
 schedulers = get_plugins('schedulers', IScheduler)
-buildslave = get_plugins('buildslave', IBuildSlave)
 steps = get_plugins('steps', IBuildStep)
-status = get_plugins('status', IStatusReceiver)
 util = get_plugins('util', None)
+reporters = get_plugins('reporters', None)
+secrets = get_plugins('secrets', None)
+webhooks = get_plugins('webhooks', None)
+
+# For plugins that are not updated to the new worker names, plus fallback of
+# current Buildbot plugins for old configuration files.
+buildslave = get_plugins('buildslave', IWorker)
+# Worker entry point for new/updated plugins.
+worker = get_plugins('worker', IWorker)

@@ -17,6 +17,10 @@
 Steps and objects related to rpmlint.
 """
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+from buildbot.steps.package import util as pkgutil
 from buildbot.steps.shell import Test
 
 
@@ -60,20 +64,18 @@ class RpmLint(Test):
             self.command += ['-f', self.config]
         self.command.append(self.fileloc)
 
+        self.obs = pkgutil.WEObserver()
+        self.addLogObserver('stdio', self.obs)
+
     def createSummary(self, log):
         """
         Create nice summary logs.
 
         @param log: log to create summary off of.
         """
-        warnings = []
+        warnings = self.obs.warnings
         errors = []
-        for line in log.readlines():
-            if ' W: ' in line:
-                warnings.append(line)
-            elif ' E: ' in line:
-                errors.append(line)
         if warnings:
-            self.addCompleteLog('%d Warnings' % len(warnings), "".join(warnings))
+            self.addCompleteLog('%d Warnings' % len(warnings), "\n".join(warnings))
         if errors:
-            self.addCompleteLog('%d Errors' % len(errors), "".join(errors))
+            self.addCompleteLog('%d Errors' % len(errors), "\n".join(errors))

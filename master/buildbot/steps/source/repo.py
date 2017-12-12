@@ -13,21 +13,24 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import re
 import textwrap
 
 from twisted.internet import defer
 from twisted.internet import reactor
+from zope.interface import implementer
 
 from buildbot import util
 from buildbot.interfaces import IRenderable
 from buildbot.process import buildstep
 from buildbot.steps.source.base import Source
-from zope.interface import implements
 
 
+@implementer(IRenderable)
 class RepoDownloadsFromProperties(util.ComparableMixin, object):
-    implements(IRenderable)
     parse_download_re = (re.compile(r"repo download ([^ ]+) ([0-9]+/[0-9]+)"),
                          re.compile(r"([^ ]+) ([0-9]+/[0-9]+)"),
                          re.compile(r"([^ ]+)/([0-9]+/[0-9]+)"),
@@ -51,8 +54,8 @@ class RepoDownloadsFromProperties(util.ComparableMixin, object):
          lets try to be nice in the format we want
          can support several instances of "repo download proj number/patch" (direct copy paste from gerrit web site)
          or several instances of "proj number/patch" (simpler version)
-         This feature allows integrator to build with several pending interdependant changes.
-         returns list of repo downloads sent to the buildslave
+         This feature allows integrator to build with several pending interdependent changes.
+         returns list of repo downloads sent to the worker
          """
         if s is None:
             return []
@@ -66,8 +69,8 @@ class RepoDownloadsFromProperties(util.ComparableMixin, object):
         return ret
 
 
+@implementer(IRenderable)
 class RepoDownloadsFromChangeSource(util.ComparableMixin, object):
-    implements(IRenderable)
     compare_attrs = ('codebase',)
 
     def __init__(self, codebase=None):
@@ -81,10 +84,11 @@ class RepoDownloadsFromChangeSource(util.ComparableMixin, object):
             changes = props.getBuild().getSourceStamp(self.codebase).changes
         for change in changes:
             if ("event.type" in change.properties and
-               change.properties["event.type"] == "patchset-created"):
-                    downloads.append("%s %s/%s" % (change.properties["event.change.project"],
-                                                   change.properties["event.change.number"],
-                                                   change.properties["event.patchSet.number"]))
+                    change.properties["event.type"] == "patchset-created"):
+                downloads.append("%s %s/%s" % (change.properties["event.change.project"],
+                                               change.properties[
+                                                   "event.change.number"],
+                                               change.properties["event.patchSet.number"]))
         return downloads
 
 
@@ -98,13 +102,15 @@ class Repo(Source):
 
     ref_not_found_re = re.compile(r"fatal: Couldn't find remote ref")
     cherry_pick_error_re = re.compile(r"|".join([r"Automatic cherry-pick failed",
-                                                r"error: "
-                                                r"fatal: "
-                                                r"possibly due to conflict resolution."]))
+                                                 r"error: "
+                                                 r"fatal: "
+                                                 r"possibly due to conflict resolution."]))
     re_change = re.compile(r".* refs/changes/\d\d/(\d+)/(\d+) -> FETCH_HEAD$")
     re_head = re.compile(r"^HEAD is now at ([0-9a-f]+)...")
-    mirror_sync_retry = 10  # number of retries, if we detect mirror desynchronization
-    mirror_sync_sleep = 60  # wait 1min between retries (thus default total retry time is 10min)
+    # number of retries, if we detect mirror desynchronization
+    mirror_sync_retry = 10
+    # wait 1min between retries (thus default total retry time is 10min)
+    mirror_sync_sleep = 60
 
     def __init__(self,
                  manifestURL=None,
@@ -182,7 +188,7 @@ class Repo(Source):
         for download in self.repoDownloads:
             project, ch_ps = download.split(" ")[-2:]
             if (self.manifestURL.endswith("/" + project) or
-               self.manifestURL.endswith("/" + project + ".git")):
+                    self.manifestURL.endswith("/" + project + ".git")):
                 ch, ps = map(int, ch_ps.split("/"))
                 branch = "refs/changes/%02d/%d/%d" % (ch % 100, ch, ps)
                 manifest_related_downloads.append(
@@ -208,17 +214,20 @@ class Repo(Source):
         # does not make sense to logEnviron for each command (just for first)
         self.logEnviron = False
         cmd.useLog(self.stdio_log, False)
-        self.stdio_log.addHeader("Starting command: %s\n" % (" ".join(command), ))
+        self.stdio_log.addHeader(
+            "Starting command: %s\n" % (" ".join(command), ))
         self.step_status.setText(["%s" % (" ".join(command[:2]))])
         d = self.runCommand(cmd)
 
-        def evaluateCommand(cmd):
+        @d.addCallback
+        def evaluateCommand(_):
             if abandonOnFailure and cmd.didFail():
-                self.step_status.setText(["repo failed at: %s" % (" ".join(command[:2]))])
-                self.stdio_log.addStderr("Source step failed while running command %s\n" % cmd)
+                self.descriptionDone = "repo failed at: %s" % (
+                    " ".join(command[:2]))
+                self.stdio_log.addStderr(
+                    "Source step failed while running command %s\n" % cmd)
                 raise buildstep.BuildStepFailed()
             return cmd.rc
-        d.addCallback(lambda _: evaluateCommand(cmd))
         return d
 
     def repoDir(self):
@@ -238,12 +247,14 @@ class Repo(Source):
         self.filterManifestPatches()
 
         if self.repoDownloads:
-            self.stdio_log.addHeader("will download:\n" + "repo download " + "\nrepo download ".join(self.repoDownloads) + "\n")
+            self.stdio_log.addHeader(
+                "will download:\n" + "repo download " + "\nrepo download ".join(self.repoDownloads) + "\n")
 
         self.willRetryInCaseOfFailure = True
 
         d = self.doRepoSync()
 
+        @d.addErrback
         def maybeRetry(why):
             # in case the tree was corrupted somehow because of previous build
             # we clobber one time, and retry everything
@@ -252,7 +263,6 @@ class Repo(Source):
                                          "\nRetry after clobber...")
                 return self.doRepoSync(forceClobber=True)
             return why  # propagate to self.failed
-        d.addErrback(maybeRetry)
         yield d
         yield self.maybeUpdateTarball()
 
@@ -282,7 +292,8 @@ class Repo(Source):
                              '--depth', str(self.depth)])
 
         if self.manifestOverrideUrl:
-            self.stdio_log.addHeader("overriding manifest with %s\n" % (self.manifestOverrideUrl))
+            self.stdio_log.addHeader(
+                "overriding manifest with %s\n" % (self.manifestOverrideUrl))
             local_file = yield self.pathExists(self.build.path_module.join(self.workdir,
                                                                            self.manifestOverrideUrl))
             if local_file:
@@ -339,13 +350,13 @@ class Repo(Source):
                 if not self._findErrorMessages(self.ref_not_found_re):
                     break
                 retry -= 1
-                self.stdio_log.addStderr("failed downloading changeset %s\n" % (download))
+                self.stdio_log.addStderr(
+                    "failed downloading changeset %s\n" % (download))
                 self.stdio_log.addHeader("wait one minute for mirror sync\n")
                 yield self._sleep(self.mirror_sync_sleep)
 
             if retry == 0:
-                self.step_status.setText(["repo: change %s does not exist" % download])
-                self.step_status.setText2(["repo: change %s does not exist" % download])
+                self.descriptionDone = "repo: change %s does not exist" % download
                 raise buildstep.BuildStepFailed()
 
             if self.lastCommand.didFail() or self._findErrorMessages(self.cherry_pick_error_re):
@@ -353,7 +364,7 @@ class Repo(Source):
                 # in stdout, which reveals the merge errors and exit
                 command = ['forall', '-c', 'git', 'diff', 'HEAD']
                 yield self._repoCmd(command, abandonOnFailure=False)
-                self.step_status.setText(["download failed: %s" % download])
+                self.descriptionDone = "download failed: %s" % download
                 raise buildstep.BuildStepFailed()
 
             if hasattr(self.lastCommand, 'stderr'):
@@ -398,7 +409,7 @@ class Repo(Source):
     def maybeUpdateTarball(self):
         if not self.tarball or self.updateTarballAge is None:
             return
-        # tarball path is absolute, so we cannot use slave's stat command
+        # tarball path is absolute, so we cannot use worker's stat command
         # stat -c%Y gives mtime in second since epoch
         res = yield self._Cmd(["stat", "-c%Y", self.tarball], collectStdout=True, abandonOnFailure=False)
         if not res:
@@ -407,14 +418,15 @@ class Repo(Source):
             now_mtime = int(self.lastCommand.stdout)
             age = now_mtime - tarball_mtime
         if res or age > self.updateTarballAge:
-            tar = self.computeTarballOptions() + ['-cvf', self.tarball, ".repo"]
+            tar = self.computeTarballOptions() + \
+                ['-cvf', self.tarball, ".repo"]
             res = yield self._Cmd(tar, abandonOnFailure=False)
-            if res:  # error with tarball.. erase tarball, but dont fail
+            if res:  # error with tarball.. erase tarball, but don't fail
                 yield self._Cmd(["rm", "-f", self.tarball], abandonOnFailure=False)
 
     # a simple shell script to gather all cleanup tweaks...
     # doing them one by one just complicate the stuff
-    # and messup the stdio log
+    # and mess up the stdio log
     def _getCleanupCommand(self):
         """also used by tests for expectations"""
         return textwrap.dedent("""\
@@ -436,7 +448,9 @@ class Repo(Source):
              repo forall -c git clean -f -d -x 2>/dev/null
              repo forall -c git reset --hard HEAD 2>/dev/null
              rm -f %(workdir)s/.repo/project.list
-             """) % self.__dict__
+             """) % dict(manifestBranch=self.manifestBranch,
+                         manifestFile=self.manifestFile,
+                         workdir=self.workdir)
 
     def doCleanup(self):
         command = self._getCleanupCommand()

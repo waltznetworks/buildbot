@@ -13,22 +13,27 @@
 #
 # Copyright Buildbot Team Members
 
-from twisted.application import service
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.application import strports
 from twisted.cred import checkers
 from twisted.cred import credentials
 from twisted.cred import error
 from twisted.cred import portal
 from twisted.internet import defer
-from twisted.python import failure
 from twisted.python import log
 from twisted.spread import pb
-from zope.interface import implements
+from zope.interface import implementer
+
+from buildbot.util import bytes2NativeString
+from buildbot.util import service
+from buildbot.util import unicode2bytes
 
 debug = False
 
 
-class PBManager(service.MultiService):
+class PBManager(service.AsyncMultiService):
 
     """
     A centralized manager for PB ports and authentication on them.
@@ -38,7 +43,7 @@ class PBManager(service.MultiService):
     """
 
     def __init__(self):
-        service.MultiService.__init__(self)
+        service.AsyncMultiService.__init__(self)
         self.setName('pbmanager')
         self.dispatchers = {}
 
@@ -71,7 +76,7 @@ class PBManager(service.MultiService):
         if not disp.users:
             disp = self.dispatchers[registration.portstr]
             del self.dispatchers[registration.portstr]
-            return disp.disownServiceParent()
+            return defer.maybeDeferred(disp.disownServiceParent)
         return defer.succeed(None)
 
 
@@ -106,8 +111,8 @@ class Registration(object):
         return disp.port.getHost().port
 
 
-class Dispatcher(service.Service):
-    implements(portal.IRealm, checkers.ICredentialsChecker)
+@implementer(portal.IRealm, checkers.ICredentialsChecker)
+class Dispatcher(service.AsyncService):
 
     credentialInterfaces = [credentials.IUsernamePassword,
                             credentials.IUsernameHashedPassword]
@@ -121,16 +126,23 @@ class Dispatcher(service.Service):
         self.portal.registerChecker(self)
         self.serverFactory = pb.PBServerFactory(self.portal)
         self.serverFactory.unsafeTracebacks = True
-        self.port = strports.listen(portstr, self.serverFactory)
+        self.port = None
 
     def __repr__(self):
         return "<pbmanager.Dispatcher for %s on %s>" % \
-            (", ".join(self.users.keys()), self.portstr)
+            (", ".join(list(self.users)), self.portstr)
+
+    def startService(self):
+        assert not self.port
+        self.port = strports.listen(self.portstr, self.serverFactory)
+        return service.AsyncService.startService(self)
 
     def stopService(self):
         # stop listening on the port when shut down
-        d = defer.maybeDeferred(self.port.stopListening)
-        d.addCallback(lambda _: service.Service.stopService(self))
+        assert self.port
+        port, self.port = self.port, None
+        d = defer.maybeDeferred(port.stopListening)
+        d.addCallback(lambda _: service.AsyncService.stopService(self))
         return d
 
     def register(self, username, password, pfactory):
@@ -152,6 +164,7 @@ class Dispatcher(service.Service):
 
     def requestAvatar(self, username, mind, interface):
         assert interface == pb.IPerspective
+        username = bytes2NativeString(username)
         if username not in self.users:
             d = defer.succeed(None)  # no perspective
         else:
@@ -159,40 +172,42 @@ class Dispatcher(service.Service):
             d = defer.maybeDeferred(afactory, mind, username)
 
         # check that we got a perspective
+        @d.addCallback
         def check(persp):
             if not persp:
                 raise ValueError("no perspective for '%s'" % username)
             return persp
-        d.addCallback(check)
 
         # call the perspective's attached(mind)
+        @d.addCallback
         def call_attached(persp):
             d = defer.maybeDeferred(persp.attached, mind)
             d.addCallback(lambda _: persp)  # keep returning the perspective
             return d
-        d.addCallback(call_attached)
 
         # return the tuple requestAvatar is expected to return
+        @d.addCallback
         def done(persp):
             return (pb.IPerspective, persp, lambda: persp.detached(mind))
-        d.addCallback(done)
 
         return d
 
     # ICredentialsChecker
 
+    @defer.inlineCallbacks
     def requestAvatarId(self, creds):
-        if creds.username in self.users:
-            password, _ = self.users[creds.username]
-            d = defer.maybeDeferred(creds.checkPassword, password)
-
-            def check(matched):
+        username = bytes2NativeString(creds.username)
+        try:
+            yield self.master.initLock.acquire()
+            if username in self.users:
+                password, _ = self.users[username]
+                matched = yield defer.maybeDeferred(
+                    creds.checkPassword, unicode2bytes(password))
                 if not matched:
                     log.msg("invalid login from user '%s'" % creds.username)
-                    return failure.Failure(error.UnauthorizedLogin())
-                return creds.username
-            d.addCallback(check)
-            return d
-        else:
+                    raise error.UnauthorizedLogin()
+                defer.returnValue(creds.username)
             log.msg("invalid login from unknown user '%s'" % creds.username)
-            return defer.fail(error.UnauthorizedLogin())
+            raise error.UnauthorizedLogin()
+        finally:
+            yield self.master.initLock.release()

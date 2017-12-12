@@ -13,12 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.clients import sendchange as sendchange_client
-from buildbot.scripts import sendchange
-from buildbot.test.util import misc
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.trial import unittest
+
+from buildbot.clients import sendchange as sendchange_client
+from buildbot.scripts import sendchange
+from buildbot.test.util import misc
 
 
 class TestSendChange(misc.StdoutAssertionsMixin, unittest.TestCase):

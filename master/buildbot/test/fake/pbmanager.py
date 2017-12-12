@@ -13,14 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-from twisted.application import service
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
 
+from buildbot.util import service
 
-class FakePBManager(service.MultiService):
+
+class FakePBManager(service.AsyncMultiService):
 
     def __init__(self):
-        service.MultiService.__init__(self)
+        service.AsyncMultiService.__init__(self)
         self.setName("fake-pbmanager")
         self._registrations = []
         self._unregistrations = []

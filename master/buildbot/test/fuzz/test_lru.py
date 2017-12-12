@@ -13,13 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import lrange
+
 import random
 
-from buildbot.test.util import fuzz
-from buildbot.util import lru
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.python import log
+
+from buildbot.test.util import fuzz
+from buildbot.util import lru
 
 # construct weakref-able objects for particular keys
 
@@ -62,7 +67,7 @@ class LRUCacheFuzzer(fuzz.FuzzTestCase):
                                    set([key + 1000]))
         self.lru = lru.AsyncLRUCache(delayed_miss_fn, 50)
 
-        keys = range(250)
+        keys = lrange(250)
         errors = []  # bail out early in the event of an error
         results = []  # keep references to (most) results
 
@@ -80,10 +85,10 @@ class LRUCacheFuzzer(fuzz.FuzzTestCase):
                     results[:-100] = []
             d.addCallback(check, key)
 
+            @d.addErrback
             def eb(f):
                 errors.append(f)
                 return f  # unhandled error -> in the logs
-            d.addErrback(eb)
 
             # give the reactor some time to process pending events
             if random.uniform(0, 1.0) < 0.5:

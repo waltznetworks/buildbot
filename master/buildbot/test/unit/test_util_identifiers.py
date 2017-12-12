@@ -13,14 +13,30 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot.util import identifiers
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import text_type
+
+import locale
+
 from twisted.python import log
 from twisted.trial import unittest
+
+from buildbot.util import identifiers
 
 
 class Tests(unittest.TestCase):
 
     def test_isIdentifier(self):
+        os_encoding = locale.getpreferredencoding()
+        try:
+            u'\N{SNOWMAN}'.encode(os_encoding)
+        except UnicodeEncodeError:
+            # Default encoding of Windows console is 'cp1252'
+            # which cannot encode the snowman.
+            raise(unittest.SkipTest("Cannot encode weird unicode "
+                "on this platform with {}".format(os_encoding)))
+
         good = [
             u"linux", u"Linux", u"abc123", u"a" * 50,
         ]
@@ -28,7 +44,7 @@ class Tests(unittest.TestCase):
             log.msg('expect %r to be good' % (g,))
             self.assertTrue(identifiers.isIdentifier(50, g))
         bad = [
-            None, u'', 'linux', u'a/b', u'\N{SNOWMAN}', u"a.b.c.d",
+            None, u'', b'linux', u'a/b', u'\N{SNOWMAN}', u"a.b.c.d",
             u"a-b_c.d9", 'spaces not allowed', u"a" * 51,
             u"123 no initial digits",
         ]
@@ -37,7 +53,7 @@ class Tests(unittest.TestCase):
             self.assertFalse(identifiers.isIdentifier(50, b))
 
     def assertEqualUnicode(self, got, exp):
-        self.failUnless(isinstance(exp, unicode))
+        self.assertTrue(isinstance(exp, text_type))
         self.assertEqual(got, exp)
 
     def test_forceIdentifier_already_is(self):
@@ -64,6 +80,11 @@ class Tests(unittest.TestCase):
         self.assertEqualUnicode(
             identifiers.forceIdentifier(100, '9 pictures of cats.html'),
             u'__pictures_of_cats_html')
+
+    def test_forceIdentifier_digits(self):
+        self.assertEqualUnicode(
+            identifiers.forceIdentifier(100, 'warnings(2000)'),
+            u'warnings_2000_')
 
     def test_incrementIdentifier_simple(self):
         self.assertEqualUnicode(

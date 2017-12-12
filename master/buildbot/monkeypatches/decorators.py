@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
 from twisted.python import util
 
@@ -20,7 +23,7 @@ from twisted.python import util
 def patch_noargs_decorator(decorator):
     def new_decorator(func):
         wrapper = decorator(func)
-        wrapper.func_original = func
+        wrapper.__wrapped__ = func
         return wrapper
     util.mergeFunctionMetadata(decorator, new_decorator)
     return new_decorator

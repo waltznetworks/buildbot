@@ -13,16 +13,21 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import mock
 
-from buildbot import config
-from buildbot.process import debug
-from twisted.application import service
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot import config
+from buildbot.process import debug
+from buildbot.test.fake import fakemaster
+from buildbot.util import service
 
-class FakeManhole(service.Service):
+
+class FakeManhole(service.AsyncService):
     pass
 
 
@@ -33,118 +38,35 @@ class TestDebugServices(unittest.TestCase):
         self.config = config.MasterConfig()
 
     @defer.inlineCallbacks
-    def test_reconfigService_debug(self):
-        # mock out PBManager
-        self.master.pbmanager = pbmanager = mock.Mock()
-        registration = mock.Mock(name='registration')
-        registration.unregister = mock.Mock(name='unregister',
-                                            side_effect=lambda: defer.succeed(None))
-        pbmanager.register.return_value = registration
-
-        ds = debug.DebugServices(self.master)
-        ds.startService()
-
-        # start off with no debug password
-        self.config.protocols = {'pb': {'port': '9824'}}
-        self.config.debugPassword = None
-        yield ds.reconfigService(self.config)
-
-        self.assertFalse(pbmanager.register.called)
-
-        # set the password, and see it register
-        self.config.debugPassword = 'seeeekrit'
-        yield ds.reconfigService(self.config)
-
-        self.assertTrue(pbmanager.register.called)
-        self.assertEqual(pbmanager.register.call_args[0][:3],
-                         ('9824', 'debug', 'seeeekrit'))
-        factory = pbmanager.register.call_args[0][3]
-        self.assertIsInstance(factory(mock.Mock(), mock.Mock()),
-                              debug.DebugPerspective)
-
-        # change the password, and see it re-register
-        self.config.debugPassword = 'lies'
-        pbmanager.register.reset_mock()
-        yield ds.reconfigService(self.config)
-
-        self.assertTrue(registration.unregister.called)
-        self.assertTrue(pbmanager.register.called)
-        self.assertEqual(pbmanager.register.call_args[0][:3],
-                         ('9824', 'debug', 'lies'))
-
-        # remove the password, and see it unregister
-        self.config.debugPassword = None
-        pbmanager.register.reset_mock()
-        registration.unregister.reset_mock()
-        yield ds.reconfigService(self.config)
-
-        self.assertTrue(registration.unregister.called)
-        self.assertFalse(pbmanager.register.called)
-
-        # re-register to test stopService
-        self.config.debugPassword = 'confusion'
-        pbmanager.register.reset_mock()
-        yield ds.reconfigService(self.config)
-
-        # stop the service, and see that it unregisters
-        pbmanager.register.reset_mock()
-        registration.unregister.reset_mock()
-        yield ds.stopService()
-
-        self.assertTrue(registration.unregister.called)
-
-    @defer.inlineCallbacks
     def test_reconfigService_manhole(self):
-        master = mock.Mock(name='master')
-        ds = debug.DebugServices(master)
-        ds.startService()
+        master = fakemaster.make_master()
+        ds = debug.DebugServices()
+        ds.setServiceParent(master)
+        yield master.startService()
 
         # start off with no manhole
-        yield ds.reconfigService(self.config)
+        yield ds.reconfigServiceWithBuildbotConfig(self.config)
 
         # set a manhole, fire it up
         self.config.manhole = manhole = FakeManhole()
-        yield ds.reconfigService(self.config)
+        yield ds.reconfigServiceWithBuildbotConfig(self.config)
 
         self.assertTrue(manhole.running)
         self.assertIdentical(manhole.master, master)
 
         # unset it, see it stop
         self.config.manhole = None
-        yield ds.reconfigService(self.config)
+        yield ds.reconfigServiceWithBuildbotConfig(self.config)
 
         self.assertFalse(manhole.running)
         self.assertIdentical(manhole.master, None)
 
         # re-start to test stopService
         self.config.manhole = manhole
-        yield ds.reconfigService(self.config)
+        yield ds.reconfigServiceWithBuildbotConfig(self.config)
 
-        # stop the service, and see that it unregisters
-        yield ds.stopService()
+        # disown the service, and see that it unregisters
+        yield ds.disownServiceParent()
 
         self.assertFalse(manhole.running)
         self.assertIdentical(manhole.master, None)
-
-
-class TestDebugPerspective(unittest.TestCase):
-
-    def setUp(self):
-        self.master = mock.Mock()
-        self.persp = debug.DebugPerspective(self.master)
-
-    def test_attached(self):
-        self.assertIdentical(self.persp.attached(mock.Mock()), self.persp)
-
-    def test_detached(self):
-        self.persp.detached(mock.Mock())  # just shouldn't crash
-
-    def test_perspective_reload(self):
-        d = defer.maybeDeferred(lambda: self.persp.perspective_reload())
-
-        def check(_):
-            self.master.reconfig.assert_called_with()
-        d.addCallback(check)
-        return d
-
-    # remaining methods require IControl adapters or other weird stuff.. TODO

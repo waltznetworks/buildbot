@@ -13,12 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.moves.itertools import filterfalse
+
 from collections import defaultdict
 from collections import deque
-from itertools import ifilterfalse
+from weakref import WeakValueDictionary
+
 from twisted.internet import defer
 from twisted.python import log
-from weakref import WeakValueDictionary
 
 
 class LRUCache(object):
@@ -70,7 +74,7 @@ class LRUCache(object):
         return result
 
     def keys(self):
-        return self.cache.keys()
+        return list(self.cache)
 
     def set_max_size(self, max_size):
         if self.max_size == max_size:
@@ -120,8 +124,8 @@ class LRUCache(object):
             refcount.clear()
             queue_appendleft = queue.appendleft
             queue_appendleft(self.sentinel)
-            for k in ifilterfalse(refcount.__contains__,
-                                  iter(queue.pop, self.sentinel)):
+            for k in filterfalse(refcount.__contains__,
+                                 iter(queue.pop, self.sentinel)):
                 queue_appendleft(k)
                 refcount[k] = 1
 

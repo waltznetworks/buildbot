@@ -13,6 +13,7 @@ We will simply change parts of the default configuration and explain the activat
 As a part of this tutorial, we will make buildbot do a few actual builds.
 
 This section will teach you how to:
+
 - make simple configuration changes and activate them
 - deal with configuration errors
 - force builds
@@ -31,8 +32,7 @@ Open a new terminal, and first enter the same sandbox you created before (where 
 
 .. code-block:: bash
 
-  cd
-  cd tmp/buildbot
+  cd ~/tmp/bb-master
   source sandbox/bin/activate
   $EDITOR master/master.cfg
 
@@ -40,12 +40,11 @@ Now, look for the section marked *PROJECT IDENTITY* which reads::
 
   ####### PROJECT IDENTITY
 
-  # the 'title' string will appear at the top of this buildbot
-  # installation's html.WebStatus home page (linked to the
-  # 'titleURL') and is embedded in the title of the waterfall HTML page.
+  # the 'title' string will appear at the top of this buildbot installation's
+  # home pages (linked to the 'titleURL').
 
-  c['title'] = "Pyflakes"
-  c['titleURL'] = "http://divmod.org/trac/wiki/DivmodPyflakes"
+  c['title'] = "Hello World CI"
+  c['titleURL'] = "https://buildbot.github.io/hello-world/"
 
 If you want, you can change either of these links to anything you want to see what happens when you change them.
 
@@ -80,19 +79,24 @@ You will see a handful of lines of output from the master log, much like this:
 
 The important lines are the ones telling you that it is loading the new configuration at the top, and the one at the bottom saying that the update is complete.
 
-Now, if you go back to `the waterfall page <http://localhost:8010/waterfall>`_, you will see that the project's name is whatever you may have changed it to and when you click on the URL of the project name at the bottom of the page it should take you to the link you put in the configuration.
+Now, if you go back to `the waterfall page <http://localhost:8010/#/waterfall>`_, you will see that the project's name is whatever you may have changed it to and when you click on the URL of the project name at the bottom of the page it should take you to the link you put in the configuration.
 
 Configuration Errors
 --------------------
 
 It is very common to make a mistake when configuring buildbot, so you might as well see now what happens in that case and what you can do to fix the error.
 
-Open up the config again and introduce a syntax error by removing the first single quote in the two lines you changed, so they read::
+Open up the config again and introduce a syntax error by removing the first single quote in the two lines you changed, so they read:
 
-  c['title'] = "Pyflakes"
-  c['titleURL'] = "http://divmod.org/trac/wiki/DivmodPyflakes"
+..
+    Format a `none` since this is not a valid Python code
 
-This creates a Python SyntaxError.
+.. code-block:: none
+
+  c[title'] = "Hello World CI"
+  c[titleURL'] = "https://buildbot.github.io/hello-world/"
+
+This creates a Python ``SyntaxError``.
 Now go ahead and reconfig the buildmaster:
 
 .. code-block:: bash
@@ -103,49 +107,47 @@ This time, the output looks like:
 
 .. code-block:: none
 
-    2011-12-04 10:12:28-0600 [-] loading configuration from /home/dustin/tmp/buildbot/master/master.cfg
-    2011-12-04 10:12:28-0600 [-] configuration update started
-    2011-12-04 10:12:28-0600 [-] error while parsing config file
-    2011-12-04 10:12:28-0600 [-] Unhandled Error
-            Traceback (most recent call last):
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/buildbot-0.8.5-py2.7.egg/buildbot/master.py", line 197, in loadTheConfigFile
-                d = self.loadConfig(f)
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/buildbot-0.8.5-py2.7.egg/buildbot/master.py", line 579, in loadConfig
-                d.addCallback(do_load)
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/Twisted-11.1.0-py2.7-linux-x86_64.egg/twisted/internet/defer.py", line 298, in addCallback
-                callbackKeywords=kw)
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/Twisted-11.1.0-py2.7-linux-x86_64.egg/twisted/internet/defer.py", line 287, in addCallbacks
-                self._runCallbacks()
-            --- <exception caught here> ---
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/Twisted-11.1.0-py2.7-linux-x86_64.egg/twisted/internet/defer.py", line 545, in _runCallbacks
-                current.result = callback(current.result, *args, **kw)
-            File "/home/dustin/tmp/buildbot/sandbox/lib/python2.7/site-packages/buildbot-0.8.5-py2.7.egg/buildbot/master.py", line 226, in do_load
-                exec f in localDict
-            exceptions.SyntaxError: EOL while scanning string literal (master.cfg, line 17)
+    2015-08-14 18:40:46+0000 [-] beginning configuration update
+    2015-08-14 18:40:46+0000 [-] Loading configuration from '/data/buildbot/master/master.cfg'
+    2015-08-14 18:40:46+0000 [-] error while parsing config file:
+	    Traceback (most recent call last):
+	      File "/usr/local/lib/python2.7/dist-packages/buildbot/master.py", line 265, in reconfig
+		d = self.doReconfig()
+	      File "/usr/local/lib/python2.7/dist-packages/twisted/internet/defer.py", line 1274, in unwindGenerator
+		return _inlineCallbacks(None, gen, Deferred())
+	      File "/usr/local/lib/python2.7/dist-packages/twisted/internet/defer.py", line 1128, in _inlineCallbacks
+		result = g.send(result)
+	      File "/usr/local/lib/python2.7/dist-packages/buildbot/master.py", line 289, in doReconfig
+		self.configFileName)
+	    --- <exception caught here> ---
+	      File "/usr/local/lib/python2.7/dist-packages/buildbot/config.py", line 156, in loadConfig
+		exec f in localDict
+	    exceptions.SyntaxError: EOL while scanning string literal (master.cfg, line 103)
 
-    Never saw reconfiguration finish.
+    2015-08-14 18:40:46+0000 [-] error while parsing config file: EOL while scanning string literal (master.cfg, line 103) (traceback in logfile)
+    2015-08-14 18:40:46+0000 [-] reconfig aborted without making any changes
+
+    Reconfiguration failed. Please inspect the master.cfg file for errors,
+    correct them, then try 'buildbot reconfig' again.
 
 This time, it's clear that there was a mistake in the configuration.
-Luckily, the buildbot master will ignore the wrong configuration and keep running with the previous configuration.
+Luckily, the Buildbot master will ignore the wrong configuration and keep running with the previous configuration.
 
 The message is clear enough, so open the configuration again, fix the error, and reconfig the master.
 
 Your First Build
 ----------------
 
-By now you're probably thinking: "All this time spent and still not done a single build?
-What was the name of this project again?"
+By now you're probably thinking: "All this time spent and still not done a single build? What was the name of this project again?"
 
-On the `waterfall <http://localhost:8010/waterfall>`_ page, click on the runtests link.
-You'll see a builder page, and in the upper-right corner is a box where you can login.
-The default username and password are both "pyflakes".
-Once you've logged in, you will see some new options that allow you to force a build:
+On the `Builders <http://localhost:8010/#/builders>`_ page, click on the runtests link.
+You'll see a builder page, and an option that allow you to force a build:
 
 .. image:: _images/force-build.png
    :alt: force a build.
 
-Click *Force Build* - there's no need to fill in any of the fields in this case.
-Next, click on `view in waterfall <http://localhost:8010/waterfall?show=runtests>`_.
+Click *Start Build* - there's no need to fill in any of the fields in this case.
+Next, click on `view in waterfall <http://localhost:8010/#/waterfall?show=runtests>`_.
 
 You will now see:
 
@@ -157,18 +159,19 @@ Enabling the IRC Bot
 
 Buildbot includes an IRC bot that you can tell to join a channel and control to report on the status of buildbot.
 
-First, start an IRC client of your choice, connect to irc.freenode.org and join an empty channel.
-In this example we will use #buildbot-test, so go join that channel.
+.. note:: Security Note
+
+    Please note that any user having access to your irc channel or can PM the bot will be able to create or stop builds :bug:`3377`.
+
+First, start an IRC client of your choice, connect to irc.freenode.net and join an empty channel.
+In this example we will use ``#buildbot-test``, so go join that channel.
 (*Note: please do not join the main buildbot channel!*)
 
-Edit the config and look for the *STATUS TARGETS* section.
-Enter these lines below the WebStatus line in master.cfg::
+Edit :file:`master.cfg` and look for the *BUILDBOT SERVICES* section.
+At the end of that section add the lines::
 
-    from buildbot.plugins import status
-
-    c['status'].append(status.WebStatus(http_port=8010, authz=authz_cfg))
-    c['status'].append(status.IRC(host="irc.freenode.org", nick="bbtest",
-                                  channels=["#buildbot-test"]))
+  c['services'].append(reporters.IRC(host="irc.freenode.net", nick="bbtest",
+                                     channels=["#buildbot-test"]))
 
 Reconfigure the build master then do:
 
@@ -180,7 +183,8 @@ The log output should contain a line like this:
 
 .. code-block:: none
 
-  2009-08-01 15:35:20+0200 [-] adding IStatusReceiver <buildbot.status.words.IRC instance at 0x300d290>
+  2016-11-13 15:53:06+0100 [-] Starting factory <buildbot.reporters.irc.IrcStatusFactory instance at 0x7ff2b4b72710>
+  2016-11-13 15:53:19+0100 [IrcStatusBot,client] <buildbot.reporters.irc.IrcStatusBot object at 0x7ff2b5075750>: I have joined #buildbot-test
 
 You should see the bot now joining in your IRC client.
 In your IRC channel, type:
@@ -199,85 +203,47 @@ Let's tell the bot to notify certain events, to learn which EVENTS we can notify
 
 Now let's set some event notifications:
 
-.. code-block:: none
+.. code-block:: irc
 
-  bbtest: notify on started
-  bbtest: notify on finished
-  bbtest: notify on failure
+  <@lsblakk> bbtest: notify on started finished failure
+  < bbtest> The following events are being notified: ['started', 'failure', 'finished']
 
-The bot should have responded to each of the commands:
+Now, go back to the web interface and force another build. Alternatively, ask the bot to force a build:
 
 .. code-block:: irc
 
-    <@lsblakk> bbtest: notify on started
-    <bbtest> The following events are being notified: ['started']
-    <@lsblakk> bbtest: notify on finished
-    <bbtest> The following events are being notified: ['started', 'finished']
-    <@lsblakk> bbtest: notify on failure
-    <bbtest> The following events are being notified: ['started', 'failure', 'finished']
-
-Now, go back to the web interface and force another build.
-
-Notice how the bot tells you about the start and finish of this build:
-
-.. code-block:: irc
-
-  < bbtest> build #1 of runtests started, including []
-  < bbtest> build #1 of runtests is complete: Success [build successful]  Build details are at http://localhost:8010/builders/runtests/builds/1
-
-You can also use the bot to force a build:
-
-.. code-block:: none
-
-  bbtest: force build runtests test build
-
-But to allow this, you'll need to have ``allowForce`` in the IRC configuration::
-
-  c['status'].append(words.IRC(host="irc.freenode.org", nick="bbtest",
-                               allowForce=True,
-                               channels=["#buildbot-test"]))
-
-This time, the bot is giving you more output, as it's specifically responding to your direct request to force a build, and explicitly tells you when the build finishes:
-
-.. code-block:: irc
-
-  <@lsblakk> bbtest: force build runtests test build
-  < bbtest> build #2 of runtests started, including []
-  < bbtest> build forced [ETA 0 seconds]
-  < bbtest> I'll give a shout when the build finishes
-  < bbtest> build #2 of runtests is complete: Success [build successful]  Build details are at http://localhost:8010/builders/runtests/builds/2
+  <@lsblakk> bbtest: force build --codebase= runtests
+  < bbtest> build #1 of runtests started
+  < bbtest> Hey! build runtests #1 is complete: Success [finished]
 
 You can also see the new builds in the web interface.
 
 .. image:: _images/irc-testrun.png
    :alt: a successful test run from IRC happened.
 
+The full documentation is available at :bb:reporter:`IRC`.
+
 Setting Authorized Web Users
 ----------------------------
 
-Further down, look for the WebStatus configuration::
+The default configuration allows everyone to perform any task like creating or stopping builds via the web interface. To restrict this to a user, look for::
 
-    from buildbot.plugins import status, util
+  c['www'] = dict(port=8010,
+                   plugins=dict(waterfall_view={}, console_view={}))
 
-    c['status'] = []
+and append::
 
-    authz_cfg=util.Authz(
-        # change any of these to True to enable; see the manual for more
-        # options
-        auth=util.BasicAuth([("pyflakes","pyflakes")]),
-        gracefulShutdown=False,
-        forceBuild='auth', # use this to test your slave once it is set up
-        forceAllBuilds=False,
-        pingBuilder=False,
-        stopBuild=False,
-        stopAllBuilds=False,
-        cancelPendingBuild=False,
-    )
-    c['status'].append(status.WebStatus(http_port=8010, authz=authz_cfg))
+  c['www']['authz'] = util.Authz(
+          allowRules = [
+              util.AnyEndpointMatcher(role="admins")
+          ],
+          roleMatchers = [
+              util.RolesFromUsername(roles=['admins'], usernames=['Alice'])
+          ]
+  )
+  c['www']['auth'] = util.UserPasswordAuth([('Alice','Password1')])
 
-The ``util.BasicAuth()`` define authorized users and their passwords.
-You can change these or add new ones.
-See :bb:status:`WebStatus` for more about the WebStatus configuration.
+For more details, see :ref:`Web-Authentication`.
 
 Debugging with Manhole
 ----------------------
@@ -289,22 +255,27 @@ To use this you will need to install an additional package or two to your virtua
 
 .. code-block:: bash
 
-    cd
-    cd tmp/buildbot
-    source sandbox/bin/activate
-    easy_install pycrypto
-    easy_install pyasn1
+  cd ~/tmp/bb-master
+  source sandbox/bin/activate
+  pip install -U pip
+  pip install cryptography pyasn1
+
+You will also need to generate an SSH host key for the Manhole server.
+
+.. code-block:: bash
+
+  mkdir -p /data/ssh_host_keys
+  ckeygen -t rsa -f /data/ssh_host_keys/ssh_host_rsa_key
 
 In your master.cfg find::
 
-    c = BuildmasterConfig = {}
+  c = BuildmasterConfig = {}
 
 Insert the following to enable debugging mode with manhole::
 
-    ####### DEBUGGING
-    from buildbot.plugins import util
-
-    c['manhole'] = util.PasswordManhole("tcp:1234:interface=127.0.0.1", "admin", "passwd")
+  ####### DEBUGGING
+  from buildbot import manhole
+  c['manhole'] = manhole.PasswordManhole("tcp:1234:interface=127.0.0.1","admin","passwd", ssh_hostkey_dir="/data/ssh_host_keys/")
 
 After restarting the master, you can ssh into the master and get an interactive Python shell:
 
@@ -314,23 +285,24 @@ After restarting the master, you can ssh into the master and get an interactive 
   # enter passwd at prompt
 
 .. note::
-
-    The pyasn1-0.1.1 release has a bug which results in an exception similar to this on startup:
+    The pyasn1-0.1.1 release has a bug which results in an exception similar to
+    this on startup:
 
     .. code-block:: none
 
         exceptions.TypeError: argument 2 must be long, not int
 
-    If you see this, the temporary solution is to install the previous version of pyasn1:
+    If you see this, the temporary solution is to install the previous version
+    of pyasn1:
 
     .. code-block:: bash
 
         pip install pyasn1-0.0.13b
 
-If you wanted to check which slaves are connected and what builders those slaves are assigned to you could do::
+If you wanted to check which workers are connected and what builders those workers are assigned to you could do::
 
-  >>> master.botmaster.slaves
-  {'example-slave': <BuildSlave 'example-slave', current builders: runtests>}
+  >>> master.workers.workers
+  {'example-worker': <Worker 'example-worker', current builders: runtests>}
 
 Objects can be explored in more depth using `dir(x)` or the helper function `show(x)`.
 
@@ -342,34 +314,36 @@ Buildbot includes a way for developers to submit patches for testing without com
 
 To set this up, add the following lines to master.cfg::
 
-    from buildbot.plugins import schedulers
-
-    c['schedulers'].append(schedulers.Try_Userpass(name='try',
-                                                   builderNames=['runtests'],
-                                                   port=5555,
-                                                   userpass=[('sampleuser','samplepass')]))
+  from buildbot.scheduler import Try_Userpass
+  c['schedulers'] = []
+  c['schedulers'].append(Try_Userpass(
+                                      name='try',
+                                      builderNames=['runtests'],
+                                      port=5555,
+                                      userpass=[('sampleuser','samplepass')]))
 
 Then you can submit changes using the :bb:cmdline:`try` command.
 
-Let's try this out by making a one-line change to pyflakes, say, to make it trace the tree by default:
+Let's try this out by making a one-line change to hello-world, say, to make it trace the tree by default:
 
 .. code-block:: bash
 
-    git clone git://github.com/buildbot/pyflakes.git pyflakes-git
-    cd pyflakes-git/pyflakes
-    $EDITOR checker.py
-    # change "traceTree = False" on line 185 to "traceTree = True"
+  git clone git://github.com/buildbot/hello-world.git hello-world-git
+  cd hello-world-git/hello
+  $EDITOR __init__.py
+  # change 'return "hello " + who' on line 6 to 'return "greets " + who'
 
 Then run buildbot's ``try`` command as follows:
 
 .. code-block:: bash
 
-    source ~/tmp/buildbot/sandbox/bin/activate
-    buildbot try --connect=pb --master=127.0.0.1:5555 --username=sampleuser --passwd=samplepass --vc=git
+  cd ~/tmp/bb-master
+  source sandbox/bin/activate
+  buildbot try --connect=pb --master=127.0.0.1:5555 --username=sampleuser --passwd=samplepass --vc=git
 
 This will do ``git diff`` for you and send the resulting patch to the server for build and test against the latest sources from Git.
 
-Now go back to the `waterfall <http://localhost:8010/waterfall>`_ page, click on the runtests link, and scroll down.
+Now go back to the `waterfall <http://localhost:8010/#/waterfall>`_ page, click on the runtests link, and scroll down.
 You should see that another build has been started with your change (and stdout for the tests should be chock-full of parse trees as a result).
 The "Reason" for the job will be listed as "'try' job", and the blamelist will be empty.
 

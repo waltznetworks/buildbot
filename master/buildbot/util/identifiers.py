@@ -13,28 +13,33 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import string_types
+from future.utils import text_type
+
 import re
 
 from buildbot import util
 
 ident_re = re.compile('^[a-zA-Z_-][a-zA-Z0-9_-]*$')
 initial_re = re.compile('^[^a-zA-Z_-]')
-subsequent_re = re.compile('[^a-zA-Z-1-9_-]')
+subsequent_re = re.compile('[^a-zA-Z0-9_-]')
 trailing_digits_re = re.compile('_([0-9]+)$')
 
 
-def isIdentifier(maxLength, object):
-    if not isinstance(object, unicode):
+def isIdentifier(maxLength, obj):
+    if not isinstance(obj, text_type):
         return False
-    elif not ident_re.match(object):
+    elif not ident_re.match(obj):
         return False
-    elif not 0 < len(object) <= maxLength:
+    elif not obj or len(obj) > maxLength:
         return False
     return True
 
 
 def forceIdentifier(maxLength, str):
-    if not isinstance(str, basestring):
+    if not isinstance(str, string_types):
         raise TypeError("%r cannot be coerced to an identifier" % (str,))
 
     # usually ascii2unicode can handle it

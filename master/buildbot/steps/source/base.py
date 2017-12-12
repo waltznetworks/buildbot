@@ -13,21 +13,25 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
 
-import StringIO
+from twisted.python import log
 
 from buildbot.process import buildstep
+from buildbot.process import properties
+from buildbot.process import remotecommand
+from buildbot.process import remotetransfer
 from buildbot.process.buildstep import LoggingBuildStep
 from buildbot.status.builder import FAILURE
 from buildbot.status.builder import SKIPPED
-from buildbot.steps.slave import CompositeStepMixin
-from buildbot.steps.transfer import _FileReader
-from twisted.python import log
+from buildbot.steps.worker import CompositeStepMixin
+from buildbot.util import bytes2NativeString
 
 
 class Source(LoggingBuildStep, CompositeStepMixin):
 
-    """This is a base class to generate a source tree in the buildslave.
+    """This is a base class to generate a source tree in the worker.
     Each version control system has a specialized subclass, and is expected
     to override __init__ and implement computeSourceRevision() and
     startVC(). The class as a whole builds up the self.args dictionary, then
@@ -72,7 +76,7 @@ class Source(LoggingBuildStep, CompositeStepMixin):
 
         The source stamp helps avoid a race condition in which someone
         commits a change after the master has decided to start a build
-        but before the slave finishes checking out the sources. At best
+        but before the worker finishes checking out the sources. At best
         this results in a build which contains more changes than the
         buildmaster thinks it has (possibly resulting in the wrong
         person taking the blame for any problems that result), at worst
@@ -82,7 +86,7 @@ class Source(LoggingBuildStep, CompositeStepMixin):
         @type logEnviron: boolean
         @param logEnviron: If this option is true (the default), then the
                            step's logfile will describe the environment
-                           variables on the slave. In situations where the
+                           variables on the worker. In situations where the
                            environment is not relevant and is long, it may
                            be easier to set logEnviron=False.
 
@@ -109,8 +113,8 @@ class Source(LoggingBuildStep, CompositeStepMixin):
             descriptionSuffix = [codebase]
 
         LoggingBuildStep.__init__(self, description=description,
-            descriptionDone=descriptionDone, descriptionSuffix=descriptionSuffix,
-            **kwargs)
+                                  descriptionDone=descriptionDone, descriptionSuffix=descriptionSuffix,
+                                  **kwargs)
 
         # This will get added to args later, after properties are rendered
         self.workdir = workdir
@@ -119,7 +123,9 @@ class Source(LoggingBuildStep, CompositeStepMixin):
 
         self.codebase = codebase
         if self.codebase:
-            self.name = ' '.join((self.name, self.codebase))
+            self.name = properties.Interpolate(
+                "%(kw:name)s-%(kw:codebase)s",
+                name=self.name, codebase=self.codebase)
 
         self.alwaysUseLatest = alwaysUseLatest
 
@@ -127,6 +133,35 @@ class Source(LoggingBuildStep, CompositeStepMixin):
         self.env = env
         self.timeout = timeout
         self.retry = retry
+
+    def _hasAttrGroupMember(self, attrGroup, attr):
+        """
+        The hasattr equivalent for attribute groups: returns whether the given
+        member is in the attribute group.
+        """
+        method_name = '%s_%s' % (attrGroup, attr)
+        return hasattr(self, method_name)
+
+    def _getAttrGroupMember(self, attrGroup, attr):
+        """
+        The getattr equivalent for attribute groups: gets and returns the
+        attribute group member.
+        """
+        method_name = '%s_%s' % (attrGroup, attr)
+        return getattr(self, method_name)
+
+    def _listAttrGroupMembers(self, attrGroup):
+        """
+        Returns a list of all members in the attribute group.
+        """
+        from inspect import getmembers, ismethod
+        methods = getmembers(self, ismethod)
+        group_prefix = attrGroup + '_'
+        group_len = len(group_prefix)
+        group_members = [method[0][group_len:]
+                         for method in methods
+                         if method[0].startswith(group_prefix)]
+        return group_members
 
     def updateSourceProperty(self, name, value, source=''):
         """
@@ -150,12 +185,6 @@ class Source(LoggingBuildStep, CompositeStepMixin):
                 % self.name
             LoggingBuildStep.setProperty(self, name, value, source)
 
-    def setStepStatus(self, step_status):
-        LoggingBuildStep.setStepStatus(self, step_status)
-
-    def setDefaultWorkdir(self, workdir):
-        self.workdir = self.workdir or workdir
-
     def describe(self, done=False):
         desc = self.descriptionDone if done else self.description
         if self.descriptionSuffix:
@@ -176,20 +205,19 @@ class Source(LoggingBuildStep, CompositeStepMixin):
     def applyPatch(self, patch):
         patch_command = ['patch', '-p%s' % patch[0], '--remove-empty-files',
                          '--force', '--forward', '-i', '.buildbot-diff']
-        cmd = buildstep.RemoteShellCommand(self.workdir,
-                                           patch_command,
-                                           env=self.env,
-                                           logEnviron=self.logEnviron)
+        cmd = remotecommand.RemoteShellCommand(self.workdir,
+                                               patch_command,
+                                               env=self.env,
+                                               logEnviron=self.logEnviron)
 
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
 
+        @d.addCallback
         def evaluateCommand(_):
             if cmd.didFail():
                 raise buildstep.BuildStepFailed()
             return cmd.rc
-
-        d.addCallback(evaluateCommand)
         return d
 
     def patch(self, _, patch):
@@ -204,41 +232,51 @@ class Source(LoggingBuildStep, CompositeStepMixin):
             self.workdir = self.build.path_module.join(self.workdir, root)
 
         def _downloadFile(buf, filename):
-            filereader = _FileReader(StringIO.StringIO(buf))
+            filereader = remotetransfer.StringFileReader(buf)
             args = {
-                'slavedest': filename,
                 'maxsize': None,
                 'reader': filereader,
                 'blocksize': 16 * 1024,
                 'workdir': self.workdir,
                 'mode': None
             }
-            cmd = buildstep.RemoteCommand('downloadFile', args)
+
+            if self.workerVersionIsOlderThan('downloadFile', '3.0'):
+                args['slavedest'] = filename
+            else:
+                args['workerdest'] = filename
+
+            cmd = remotecommand.RemoteCommand('downloadFile', args)
             cmd.useLog(self.stdio_log, False)
             log.msg("Downloading file: %s" % (filename))
             d = self.runCommand(cmd)
 
+            @d.addCallback
             def evaluateCommand(_):
                 if cmd.didFail():
                     raise buildstep.BuildStepFailed()
                 return cmd.rc
-
-            d.addCallback(evaluateCommand)
             return d
 
         d = _downloadFile(diff, ".buildbot-diff")
-        d.addCallback(lambda _: _downloadFile("patched\n", ".buildbot-patched"))
+        d.addCallback(
+            lambda _: _downloadFile("patched\n", ".buildbot-patched"))
         d.addCallback(lambda _: self.applyPatch(patch))
+        cmd = remotecommand.RemoteCommand('rmdir', {'dir': self.build.path_module.join(self.workdir, ".buildbot-diff"),
+                                                    'logEnviron': self.logEnviron})
+        cmd.useLog(self.stdio_log, False)
+        d.addCallback(lambda _: self.runCommand(cmd))
 
-        def removePatch(_):
-            return self.runRmdir(self.build.path_module.join(self.workdir, ".buildbot-diff"),
-                                 evaluateCommand=lambda cmd: cmd.rc)
-
-        d.addCallback(removePatch)
+        @d.addCallback
+        def evaluateCommand(_):
+            if cmd.didFail():
+                raise buildstep.BuildStepFailed()
+            return cmd.rc
         return d
 
     def sourcedirIsPatched(self):
-        d = self.pathExists(self.build.path_module.join(self.workdir, '.buildbot-patched'))
+        d = self.pathExists(
+            self.build.path_module.join(self.workdir, '.buildbot-patched'))
         return d
 
     def start(self):
@@ -273,14 +311,15 @@ class Source(LoggingBuildStep, CompositeStepMixin):
                 # root is optional.
                 patch = s.patch
                 if patch:
-                    self.addCompleteLog("patch", patch[1])
+                    self.addCompleteLog("patch", bytes2NativeString(patch[1]))
             else:
-                log.msg("No sourcestamp found in build for codebase '%s'" % self.codebase)
-                self.step_status.setText(["Codebase", '%s' % self.codebase, "not", "in", "build"])
+                log.msg(
+                    "No sourcestamp found in build for codebase '%s'" % self.codebase)
+                self.step_status.setText(
+                    ["Codebase", '%s' % self.codebase, "not", "in", "build"])
                 self.addCompleteLog("log",
                                     "No sourcestamp found in build for codebase '%s'"
                                     % self.codebase)
-                self.finished(FAILURE)
                 return FAILURE
 
         else:

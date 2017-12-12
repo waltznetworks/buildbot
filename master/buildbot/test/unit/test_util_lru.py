@@ -13,15 +13,20 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+
 import gc
 import random
 import string
 
-from buildbot.util import lru
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.python import failure
 from twisted.trial import unittest
+
+from buildbot.util import lru
 
 # construct weakref-able objects for particular keys
 
@@ -111,8 +116,7 @@ class LRUCacheTest(unittest.TestCase):
         def miss_fn(k):
             if k == 'b':
                 return None
-            else:
-                return short(k)
+            return short(k)
         self.lru = lru.LRUCache(miss_fn, 1)
         val = self.lru.get('a')
         self.check_result(val, short('a'), 0, 1)
@@ -150,7 +154,7 @@ class LRUCacheTest(unittest.TestCase):
         self.check_result(res, short('a'), 29, 3)
 
     def test_all_misses(self):
-        for i, c in enumerate(string.lowercase + string.uppercase):
+        for i, c in enumerate(string.ascii_lowercase + string.ascii_uppercase):
             res = self.lru.get(c)
             self.check_result(res, short(c), 0, i + 1)
 
@@ -172,7 +176,7 @@ class LRUCacheTest(unittest.TestCase):
         self.check_result(res, short('a'), 0, 1)
 
         self.lru.miss_fn = long
-        for i in xrange(100):
+        for i in range(100):
             res = self.lru.get('a')
             self.check_result(res, short('a'), i + 1, 1)
 
@@ -187,7 +191,7 @@ class LRUCacheTest(unittest.TestCase):
 
         # blow out the cache and the queue
         self.lru.miss_fn = long
-        for c in (string.lowercase[2:] * 5):
+        for c in (string.ascii_lowercase[2:] * 5):
             self.lru.get(c)
 
         # and fetch a again, expecting the cached value
@@ -199,7 +203,7 @@ class LRUCacheTest(unittest.TestCase):
         self.check_result(res, long('b'), exp_refhits=1)
 
     def test_fuzz(self):
-        chars = list(string.lowercase * 40)
+        chars = list(string.ascii_lowercase * 40)
         random.shuffle(chars)
         for i, c in enumerate(chars):
             res = self.lru.get(c)
@@ -362,8 +366,7 @@ class AsyncLRUCacheTest(unittest.TestCase):
         def miss_fn(k):
             if k == 'b':
                 return defer.succeed(None)
-            else:
-                return defer.succeed(short(k))
+            return defer.succeed(short(k))
         self.lru = lru.AsyncLRUCache(miss_fn, 1)
         d = defer.succeed(None)
 
@@ -409,7 +412,7 @@ class AsyncLRUCacheTest(unittest.TestCase):
 
     @defer.inlineCallbacks
     def test_all_misses(self):
-        for i, c in enumerate(string.lowercase + string.uppercase):
+        for i, c in enumerate(string.ascii_lowercase + string.ascii_uppercase):
             res = yield self.lru.get(c)
             self.check_result(res, short(c), 0, i + 1)
 
@@ -433,7 +436,7 @@ class AsyncLRUCacheTest(unittest.TestCase):
         self.check_result(res, short('a'), 0, 1)
 
         self.lru.miss_fn = self.long_miss_fn
-        for i in xrange(100):
+        for i in range(100):
             res = yield self.lru.get('a')
             self.check_result(res, short('a'), i + 1, 1)
 
@@ -449,7 +452,7 @@ class AsyncLRUCacheTest(unittest.TestCase):
 
         # blow out the cache and the queue
         self.lru.miss_fn = self.long_miss_fn
-        for c in (string.lowercase[2:] * 5):
+        for c in (string.ascii_lowercase[2:] * 5):
             yield self.lru.get(c)
 
         # and fetch a again, expecting the cached value
@@ -462,14 +465,14 @@ class AsyncLRUCacheTest(unittest.TestCase):
 
     @defer.inlineCallbacks
     def test_fuzz(self):
-        chars = list(string.lowercase * 40)
+        chars = list(string.ascii_lowercase * 40)
         random.shuffle(chars)
         for i, c in enumerate(chars):
             res = yield self.lru.get(c)
             self.check_result(res, short(c))
 
     def test_massively_parallel(self):
-        chars = list(string.lowercase * 5)
+        chars = list(string.ascii_lowercase * 5)
 
         misses = [0]
 
@@ -487,11 +490,11 @@ class AsyncLRUCacheTest(unittest.TestCase):
             check(c, self.lru.get(c))
             for c in chars])
 
+        @d.addCallback
         def post_check(_):
             self.assertEqual(misses[0], 26)
             self.assertEqual(self.lru.misses, 26)
             self.assertEqual(self.lru.hits, 4 * 26)
-        d.addCallback(post_check)
         return d
 
     def test_slow_fetch(self):
@@ -514,9 +517,9 @@ class AsyncLRUCacheTest(unittest.TestCase):
 
         d = defer.gatherResults(ds)
 
+        @d.addCallback
         def check(_):
             self.assertEqual((self.lru.hits, self.lru.misses), (7, 1))
-        d.addCallback(check)
         return d
 
     def test_slow_failure(self):

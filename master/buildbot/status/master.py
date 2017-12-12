@@ -13,12 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import print_function
+from future.moves.urllib.parse import quote as urlquote
+from future.utils import iteritems
+from future.utils import itervalues
 
 import os
-import urllib
 
-from buildbot import config
+from twisted.internet import defer
+from twisted.python import log
+from zope.interface import implementer
+
 from buildbot import interfaces
 from buildbot import util
 from buildbot.changes import changes
@@ -26,23 +32,16 @@ from buildbot.status import builder
 from buildbot.status import buildrequest
 from buildbot.status import buildset
 from buildbot.util import bbcollections
+from buildbot.util import bytes2NativeString
+from buildbot.util import service
 from buildbot.util.eventual import eventually
-from cPickle import load
-from twisted.application import service
-from twisted.internet import defer
-from twisted.persisted import styles
-from twisted.python import log
-from zope.interface import implements
 
 
-class Status(config.ReconfigurableServiceMixin, service.MultiService):
-    implements(interfaces.IStatus)
+@implementer(interfaces.IStatus)
+class Status(service.ReconfigurableServiceMixin, service.AsyncMultiService):
 
-    def __init__(self, master):
-        service.MultiService.__init__(self)
-        self.master = master
-        self.botmaster = master.botmaster
-        self.basedir = master.basedir
+    def __init__(self):
+        service.AsyncMultiService.__init__(self)
         self.watchers = []
         # No default limit to the log size
         self.logMaxSize = None
@@ -55,64 +54,61 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
         self._build_request_sub = None
         self._change_sub = None
 
+    @property
+    def botmaster(self):
+        return self.master.botmaster
+
+    @property
+    def workers(self):
+        return self.master.workers
+
+    @property
+    def basedir(self):
+        return self.master.basedir
+
     # service management
 
+    @defer.inlineCallbacks
     def startService(self):
         # subscribe to the things we need to know about
-        self._buildset_completion_sub = \
-            self.master.subscribeToBuildsetCompletions(
-                self._buildsetCompletionCallback)
-        self._buildset_sub = \
-            self.master.subscribeToBuildsets(
-                self._buildsetCallback)
-        self._build_request_sub = \
-            self.master.subscribeToBuildRequests(
-                self._buildRequestCallback)
-        self._change_sub = \
-            self.master.subscribeToChanges(
-                self.changeAdded)
+        self._buildset_new_consumer = yield self.master.mq.startConsuming(
+            self.bs_new_consumer_cb, ('buildsets', None, 'new'))
+        self._buildset_complete_consumer = yield self.master.mq.startConsuming(
+            self.bs_complete_consumer_cb, ('buildsets', None, 'complete'))
+        self._br_consumer = yield self.master.mq.startConsuming(
+            self.br_consumer_cb, ('buildrequests', None, 'new'))
+        self._change_consumer = yield self.master.mq.startConsuming(
+            self.change_consumer_cb, ('changes', None, 'new'))
 
-        return service.MultiService.startService(self)
+        yield service.AsyncMultiService.startService(self)
 
     @defer.inlineCallbacks
-    def reconfigService(self, new_config):
+    def reconfigServiceWithBuildbotConfig(self, new_config):
         # remove the old listeners, then add the new
         for sr in list(self):
-            yield defer.maybeDeferred(lambda:
-                                      sr.disownServiceParent())
-
-            # WebStatus instances tend to "hang around" longer than we'd like -
-            # if there's an ongoing HTTP request, or even a connection held
-            # open by keepalive, then users may still be talking to an old
-            # WebStatus.  So WebStatus objects get to keep their `master`
-            # attribute, but all other status objects lose theirs.  And we want
-            # to test this without importing WebStatus, so we use name
-            if not sr.__class__.__name__.endswith('WebStatus'):
-                sr.master = None
+            yield sr.disownServiceParent()
 
         for sr in new_config.status:
-            sr.master = self.master
-            sr.setServiceParent(self)
+            yield sr.setServiceParent(self)
 
         # reconfig any newly-added change sources, as well as existing
-        yield config.ReconfigurableServiceMixin.reconfigService(self,
-                                                                new_config)
+        yield service.ReconfigurableServiceMixin.reconfigServiceWithBuildbotConfig(self,
+                                                                                   new_config)
 
     def stopService(self):
-        if self._buildset_completion_sub:
-            self._buildset_completion_sub.unsubscribe()
-            self._buildset_completion_sub = None
-        if self._buildset_sub:
-            self._buildset_sub.unsubscribe()
-            self._buildset_sub = None
-        if self._build_request_sub:
-            self._build_request_sub.unsubscribe()
-            self._build_request_sub = None
-        if self._change_sub:
-            self._change_sub.unsubscribe()
-            self._change_sub = None
+        if self._buildset_complete_consumer:
+            self._buildset_complete_consumer.stopConsuming()
+            self._buildset_complete_consumer = None
 
-        return service.MultiService.stopService(self)
+        if self._buildset_new_consumer:
+            self._buildset_new_consumer.stopConsuming()
+            self._buildset_new_consumer = None
+
+        if self._change_consumer:
+            self._change_consumer.stopConsuming()
+            self._change_consumer = None
+
+        return service.AsyncMultiService.stopService(self)
 
     # clean shutdown
 
@@ -146,11 +142,23 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
     def getMetrics(self):
         return self.master.metrics
 
-    def getURLForBuild(self, builder_name, build_number):
+    def getURLForBuild(self, builderid, build_number):
         prefix = self.getBuildbotURL()
-        return prefix + "builders/%s/builds/%d" % (
-            urllib.quote(builder_name, safe=''),
+        return prefix + "#builders/%d/builds/%d" % (
+            builderid,
             build_number)
+
+    def _getURLForBuildWithBuildername(self, builder_name, build_number):
+        # don't use this API. this URL is not supported
+        # its here waiting for getURLForThing removal or switch to deferred
+        prefix = self.getBuildbotURL()
+        return prefix + "#builders/%s/builds/%d" % (
+            urlquote(builder_name, safe=''),
+            build_number)
+
+    def getURLForBuildrequest(self, buildrequestid):
+        prefix = self.getBuildbotURL()
+        return prefix + "#buildrequests/%d" % (buildrequestid,)
 
     def getURLForThing(self, thing):
         prefix = self.getBuildbotURL()
@@ -162,29 +170,32 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             pass
         if interfaces.IBuilderStatus.providedBy(thing):
             bldr = thing
-            return prefix + "builders/%s" % (
-                urllib.quote(bldr.getName(), safe=''),
+            return prefix + "#builders/%s" % (
+                urlquote(bldr.getName(), safe=''),
             )
         if interfaces.IBuildStatus.providedBy(thing):
             build = thing
             bldr = build.getBuilder()
-            return self.getURLForBuild(bldr.getName(), build.getNumber())
+            # should be:
+            # builderid = yield bldr.getBuilderId()
+            # return self.getURLForBuild(self, builderid, build.getNumber())
+            return self._getURLForBuildWithBuildername(bldr.getName(), build.getNumber())
 
         if interfaces.IBuildStepStatus.providedBy(thing):
             step = thing
             build = step.getBuild()
             bldr = build.getBuilder()
-            return prefix + "builders/%s/builds/%d/steps/%s" % (
-                urllib.quote(bldr.getName(), safe=''),
+            return prefix + "#builders/%s/builds/%d/steps/%s" % (
+                urlquote(bldr.getName(), safe=''),
                 build.getNumber(),
-                urllib.quote(step.getName(), safe=''))
+                urlquote(step.getName(), safe=''))
         # IBuildSetStatus
         # IBuildRequestStatus
-        # ISlaveStatus
-        if interfaces.ISlaveStatus.providedBy(thing):
-            slave = thing
-            return prefix + "buildslaves/%s" % (
-                urllib.quote(slave.getName(), safe=''),
+        # IWorkerStatus
+        if interfaces.IWorkerStatus.providedBy(thing):
+            worker = thing
+            return prefix + "#workers/%s" % (
+                urlquote(worker.getName(), safe=''),
             )
 
         # IStatusEvent
@@ -192,25 +203,7 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             # TODO: this is goofy, create IChange or something
             if isinstance(thing, changes.Change):
                 change = thing
-                return "%schanges/%d" % (prefix, change.number)
-
-        if interfaces.IStatusLog.providedBy(thing):
-            loog = thing
-            step = loog.getStep()
-            build = step.getBuild()
-            bldr = build.getBuilder()
-
-            logs = step.getLogs()
-            for i in range(len(logs)):
-                if loog is logs[i]:
-                    break
-            else:
-                return None
-            return prefix + "builders/%s/builds/%d/steps/%s/logs/%s" % (
-                urllib.quote(bldr.getName(), safe=''),
-                build.getNumber(),
-                urllib.quote(step.getName(), safe=''),
-                urllib.quote(loog.getName(), safe=''))
+                return "%s#changes/%d" % (prefix, change.number)
 
     def getChangeSources(self):
         return list(self.master.change_svc)
@@ -219,11 +212,11 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
         """Get a Change object; returns a deferred"""
         d = self.master.db.changes.getChange(number)
 
+        @d.addCallback
         def chdict2change(chdict):
             if not chdict:
                 return None
             return changes.Change.fromChdict(self.master, chdict)
-        d.addCallback(chdict2change)
         return d
 
     def getSchedulers(self):
@@ -235,15 +228,16 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             tags = categories
 
         if tags is None:
-            return util.naturalSort(self.botmaster.builderNames)  # don't let them break it
+            # don't let them break it
+            return util.naturalSort(self.botmaster.builderNames)
 
-        l = []
+        ret = []
         # respect addition order
         for name in self.botmaster.builderNames:
             bldr = self.getBuilder(name)
             if bldr.matchesAnyTag(tags):
-                l.append(name)
-        return util.naturalSort(l)
+                ret.append(name)
+        return util.naturalSort(ret)
 
     def getBuilder(self, name):
         """
@@ -251,24 +245,29 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
         """
         return self.botmaster.builders[name].builder_status
 
-    def getSlaveNames(self):
-        return self.botmaster.slaves.keys()
+    def getWorkerNames(self):
+        return list(iteritems(self.workers.workers))
 
-    def getSlave(self, slavename):
-        return self.botmaster.slaves[slavename].slave_status
+    def getWorker(self, workername):
+        return self.workers.workers[workername].worker_status
 
     def getBuildSets(self):
         d = self.master.db.buildsets.getBuildsets(complete=False)
 
+        @d.addCallback
         def make_status_objects(bsdicts):
             return [buildset.BuildSetStatus(bsdict, self)
                     for bsdict in bsdicts]
-        d.addCallback(make_status_objects)
         return d
 
-    def generateFinishedBuilds(self, builders=[], branches=[],
+    def generateFinishedBuilds(self, builders=None, branches=None,
                                num_builds=None, finished_before=None,
                                max_search=200):
+        if builders is None:
+            builders = []
+
+        if branches is None:
+            branches = []
 
         def want_builder(bn):
             if builders:
@@ -301,7 +300,7 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
                     # already exhausted
                     continue
                 try:
-                    next_build[i] = g.next()
+                    next_build[i] = next(g)
                 except StopIteration:
                     next_build[i] = None
                     sources[i] = None
@@ -313,7 +312,7 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             candidates = [(i, b, b.getTimes()[1])
                           for i, b in enumerate(next_build)
                           if b is not None]
-            candidates.sort(lambda x, y: cmp(x[2], y[2]))
+            candidates.sort(key=lambda x: x[2])
             if not candidates:
                 return
 
@@ -344,54 +343,17 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
         """
         @rtype: L{BuilderStatus}
         """
-        filename = os.path.join(self.basedir, basedir, "builder")
-        log.msg("trying to load status pickle from %s" % filename)
-        builder_status = None
-        try:
-            with open(filename, "rb") as f:
-                builder_status = load(f)
-            builder_status.master = self.master
-
-            # (bug #1068) if we need to upgrade, we probably need to rewrite
-            # this pickle, too.  We determine this by looking at the list of
-            # Versioned objects that have been unpickled, and (after doUpgrade)
-            # checking to see if any of them set wasUpgraded.  The Versioneds'
-            # upgradeToVersionNN methods all set this.
-            versioneds = styles.versionedsToUpgrade
-            styles.doUpgrade()
-            if True in [hasattr(o, 'wasUpgraded') for o in versioneds.values()]:
-                log.msg("re-writing upgraded builder pickle")
-                builder_status.saveYourself()
-
-        except IOError:
-            log.msg("no saved status pickle, creating a new one")
-        except:
-            log.msg("error while loading status pickle, creating a new one")
-            log.msg("error follows:")
-            log.err()
-        if not builder_status:
-            builder_status = builder.BuilderStatus(name, tags, self.master,
-                                                   description)
-            builder_status.addPointEvent(["builder", "created"])
-        log.msg("added builder %s with tags %r" % (name, tags))
-        # an unpickled object might not have tags set from before,
-        # so set it here to make sure
+        builder_status = builder.BuilderStatus(name, tags, self.master,
+                                               description)
         builder_status.setTags(tags)
         builder_status.description = description
         builder_status.master = self.master
-        builder_status.basedir = os.path.join(self.basedir, basedir)
+        builder_status.basedir = os.path.join(bytes2NativeString(self.basedir),
+                                              bytes2NativeString(basedir))
         builder_status.name = name  # it might have been updated
         builder_status.status = self
 
-        if not os.path.isdir(builder_status.basedir):
-            os.makedirs(builder_status.basedir)
-        builder_status.determineNextBuildNumber()
-
         builder_status.setBigState("offline")
-
-        for t in self.watchers:
-            self.announceNewBuilder(t, name, builder_status)
-
         return builder_status
 
     def builderRemoved(self, name):
@@ -399,39 +361,71 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             if hasattr(t, 'builderRemoved'):
                 t.builderRemoved(name)
 
-    def slaveConnected(self, name):
+    def workerConnected(self, name):
         for t in self.watchers:
-            if hasattr(t, 'slaveConnected'):
-                t.slaveConnected(name)
+            if hasattr(t, 'workerConnected'):
+                t.workerConnected(name)
 
-    def slaveDisconnected(self, name):
+    def workerDisconnected(self, name):
         for t in self.watchers:
-            if hasattr(t, 'slaveDisconnected'):
-                t.slaveDisconnected(name)
+            if hasattr(t, 'workerDisconnected'):
+                t.workerDisconnected(name)
 
-    def slavePaused(self, name):
+    def workerPaused(self, name):
         for t in self.watchers:
-            if hasattr(t, 'slavePaused'):
-                t.slavePaused(name)
+            if hasattr(t, 'workerPaused'):
+                t.workerPaused(name)
 
-    def slaveUnpaused(self, name):
+    def workerUnpaused(self, name):
         for t in self.watchers:
-            if hasattr(t, 'slaveUnpaused'):
-                t.slaveUnpaused(name)
+            if hasattr(t, 'workerUnpaused'):
+                t.workerUnpaused(name)
 
     def changeAdded(self, change):
         for t in self.watchers:
             if hasattr(t, 'changeAdded'):
                 t.changeAdded(change)
 
+    @defer.inlineCallbacks
+    def br_consumer_cb(self, key, msg):
+        builderid = msg['builderid']
+        buildername = None
+        # convert builderid to buildername
+        for b in itervalues(self.botmaster.builders):
+            if builderid == (yield b.getBuilderId()):
+                buildername = b.name
+                break
+        if buildername in self._builder_observers:
+            brs = buildrequest.BuildRequestStatus(buildername,
+                                                  msg['buildrequestid'], self)
+            for observer in self._builder_observers[buildername]:
+                if hasattr(observer, 'requestSubmitted'):
+                    eventually(observer.requestSubmitted, brs)
+
+    @defer.inlineCallbacks
+    def change_consumer_cb(self, key, msg):
+        # get a list of watchers - no sense querying the change
+        # if nobody's listening
+        interested = [t for t in self.watchers
+                      if hasattr(t, 'changeAdded')]
+        if not interested:
+            return
+
+        chdict = yield self.master.db.changes.getChange(msg['changeid'])
+        change = yield changes.Change.fromChdict(self.master, chdict)
+
+        for t in interested:
+            t.changeAdded(change)
+
     def asDict(self):
-        result = {}
-        # Constant
-        result['title'] = self.getTitle()
-        result['titleURL'] = self.getTitleURL()
-        result['buildbotURL'] = self.getBuildbotURL()
-        # TODO: self.getSchedulers()
-        # self.getChangeSources()
+        result = {
+            # Constant
+            'title': self.getTitle(),
+            'titleURL': self.getTitleURL(),
+            'buildbotURL': self.getBuildbotURL(),
+            # TODO: self.getSchedulers()
+            # self.getChangeSources()
+        }
         return result
 
     def build_started(self, brid, buildername, build_status):
@@ -458,12 +452,12 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
             return
         d = self.master.db.buildsets.getBuildset(bsid)
 
+        @d.addCallback
         def do_notifies(bsdict):
             bss = buildset.BuildSetStatus(bsdict, self)
             if bss.isFinished():
                 for d in self._buildset_finished_waiters.pop(bsid):
                     eventually(d.callback, bss)
-        d.addCallback(do_notifies)
         d.addErrback(log.err, 'while notifying for buildset finishes')
 
     def _builder_subscribe(self, buildername, watcher):
@@ -473,26 +467,17 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
     def _builder_unsubscribe(self, buildername, watcher):
         self._builder_observers.discard(buildername, watcher)
 
-    def _buildsetCallback(self, **kwargs):
-        bsid = kwargs['bsid']
+    def bs_new_consumer_cb(self, key, msg):
+        bsid = msg['bsid']
         d = self.master.db.buildsets.getBuildset(bsid)
 
+        @d.addCallback
         def do_notifies(bsdict):
             bss = buildset.BuildSetStatus(bsdict, self)
             for t in self.watchers:
                 if hasattr(t, 'buildsetSubmitted'):
                     t.buildsetSubmitted(bss)
-        d.addCallback(do_notifies)
-        d.addErrback(log.err, 'while notifying buildsetSubmitted')
+        return d
 
-    def _buildsetCompletionCallback(self, bsid, result):
-        self._maybeBuildsetFinished(bsid)
-
-    def _buildRequestCallback(self, notif):
-        buildername = notif['buildername']
-        if buildername in self._builder_observers:
-            brs = buildrequest.BuildRequestStatus(buildername,
-                                                  notif['brid'], self)
-            for observer in self._builder_observers[buildername]:
-                if hasattr(observer, 'requestSubmitted'):
-                    eventually(observer.requestSubmitted, brs)
+    def bs_complete_consumer_cb(self, key, msg):
+        self._maybeBuildsetFinished(msg['bsid'])

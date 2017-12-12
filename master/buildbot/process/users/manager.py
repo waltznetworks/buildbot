@@ -13,12 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
-from buildbot import config
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.application import service
 from twisted.internet import defer
 
+from buildbot.util import service as util_service
 
-class UserManagerManager(config.ReconfigurableServiceMixin,
+
+class UserManagerManager(util_service.ReconfigurableServiceMixin,
                          service.MultiService):
     # this class manages a fleet of user managers; hence the name..
 
@@ -28,19 +32,18 @@ class UserManagerManager(config.ReconfigurableServiceMixin,
         self.master = master
 
     @defer.inlineCallbacks
-    def reconfigService(self, new_config):
+    def reconfigServiceWithBuildbotConfig(self, new_config):
         # this is easy - kick out all of the old managers, and add the
         # new ones.
 
+        # pylint: disable=cell-var-from-loop
         for mgr in list(self):
             yield defer.maybeDeferred(lambda:
                                       mgr.disownServiceParent())
-            mgr.master = None
 
         for mgr in new_config.user_managers:
-            mgr.master = self.master
-            mgr.setServiceParent(self)
+            yield mgr.setServiceParent(self)
 
         # reconfig any newly-added change sources, as well as existing
-        yield config.ReconfigurableServiceMixin.reconfigService(self,
-                                                                new_config)
+        yield util_service.ReconfigurableServiceMixin.reconfigServiceWithBuildbotConfig(self,
+                                                                                        new_config)

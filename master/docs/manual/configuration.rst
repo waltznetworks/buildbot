@@ -10,16 +10,21 @@ In more advanced Buildbot configurations, Buildbot acts as a framework for a con
 The next section, :doc:`customization`, describes this approach, with frequent references into the :ref:`development documentation <Buildbot Development>`.
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
 
     cfg-intro
     cfg-global
     cfg-changesources
     cfg-schedulers
-    cfg-buildslaves
+    cfg-workers
     cfg-builders
     cfg-buildfactories
     cfg-properties
     cfg-buildsteps
     cfg-interlocks
-    cfg-statustargets
+    cfg-reporters
+    cfg-www
+    cfg-wwwhooks
+    cfg-services
+    cfg-dbconfig
+    cfg-configurators

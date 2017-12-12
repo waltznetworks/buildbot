@@ -13,14 +13,32 @@
 #
 # Copyright Buildbot Team Members
 
-from StringIO import StringIO
-from mock import Mock
+from __future__ import absolute_import
+from __future__ import print_function
+from future.utils import text_type
 
-from buildbot.status.web import baseweb
-from buildbot.test.fake import fakemaster
+from io import BytesIO
+
+from mock import Mock
 
 from twisted.internet import defer
 from twisted.web import server
+
+from buildbot.test.fake import fakemaster
+
+
+def fakeMasterForHooks():
+    master = fakemaster.make_master()
+    master.addedChanges = []
+    master.www = Mock()
+
+    def addChange(**kwargs):
+        if 'isdir' in kwargs or 'is_dir' in kwargs:
+            return defer.fail(AttributeError('isdir/is_dir is not accepted'))
+        master.addedChanges.append(kwargs)
+        return defer.succeed(Mock())
+    master.addChange = addChange
+    return master
 
 
 class FakeRequest(Mock):
@@ -31,36 +49,25 @@ class FakeRequest(Mock):
     arguments to self.addedChanges.
     """
 
-    written = ''
+    written = b''
     finished = False
     redirected_to = None
     failure = None
 
-    def __init__(self, args=None, content=''):
-        Mock.__init__(self, spec=server.Request)
+    def __init__(self, args=None, content=b''):
+        Mock.__init__(self)
 
         if args is None:
             args = {}
 
         self.args = args
-        self.content = StringIO(content)
-        self.site = Mock(spec=server.Site)
-        webstatus = baseweb.WebStatus(site=self.site)
-        self.site.buildbot_service = webstatus
-        self.uri = '/'
+        self.content = BytesIO(content)
+        self.site = Mock()
+        self.site.buildbot_service = Mock()
+        self.uri = b'/'
         self.prepath = []
-        self.method = 'GET'
+        self.method = b'GET'
         self.received_headers = {}
-        master = webstatus.master = fakemaster.make_master()
-
-        webstatus.setUpJinja2()
-
-        self.addedChanges = []
-
-        def addChange(**kwargs):
-            self.addedChanges.append(kwargs)
-            return defer.succeed(Mock())
-        master.addChange = addChange
 
         self.deferred = defer.Deferred()
 
@@ -86,12 +93,28 @@ class FakeRequest(Mock):
 
     # cribed from twisted.web.test._util._render
     def test_render(self, resource):
+        for arg in self.args:
+            if not isinstance(arg, bytes):
+                raise ValueError("self.args: {!r},  contains "
+                    "values which are not bytes".format(self.args))
+
+        if self.uri and not isinstance(self.uri, bytes):
+                raise ValueError("self.uri: {!r} is {}, not bytes".format(
+                    self.uri, type(self.uri)))
+
+        if self.method and not isinstance(self.method, bytes):
+                raise ValueError("self.method: {!r} is {}, not bytes".format(
+                    self.method, type(self.method)))
+
         result = resource.render(self)
-        if isinstance(result, str):
+        if isinstance(result, bytes):
             self.write(result)
             self.finish()
             return self.deferred
+        elif isinstance(result, text_type):
+            raise ValueError("{!r} should return bytes, not {}: {!r}".format(
+                resource.render, type(result), result))
         elif result is server.NOT_DONE_YET:
             return self.deferred
         else:
-            raise ValueError("Unexpected return value: %r" % (result,))
+            raise ValueError("Unexpected return value: {!r}".format(result))

@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.trial import unittest
 
 
@@ -75,20 +78,6 @@ class OldImportPaths(unittest.TestCase):
         from buildbot.scheduler import Try_Userpass
         assert Try_Userpass
 
-    def test_changes_changes_ChangeMaster(self):
-        # this must exist to open old changes pickles
-        from buildbot.changes.changes import ChangeMaster
-        assert ChangeMaster
-
-    def test_changes_changes_Change(self):
-        # this must exist to open old changes pickles
-        from buildbot.changes.changes import Change
-        assert Change
-
-    def test_status_html_Webstatus(self):
-        from buildbot.status.html import WebStatus
-        assert WebStatus
-
     def test_schedulers_filter_ChangeFilter(self):
         # this was the location of ChangeFilter until 0.8.4
         from buildbot.schedulers.filter import ChangeFilter
@@ -102,18 +91,12 @@ class OldImportPaths(unittest.TestCase):
         from buildbot.buildrequest import BuildRequest
         assert BuildRequest
 
-    def test_sourcestamp_SourceStamp(self):
-        # this must exist, and the class must be defined at this package path,
-        # in order for old build pickles to be loaded.
-        from buildbot.sourcestamp import SourceStamp
-        assert SourceStamp
-
     def test_process_subunitlogobserver_SubunitShellCommand(self):
         from buildbot.process.subunitlogobserver import SubunitShellCommand
         assert SubunitShellCommand
 
     def test_status_builder_results(self):
-        # these symbols are now in buildbot.status.results, but lots of user
+        # these symbols are now in buildbot.process.results, but lots of user
         # code references them here:
         from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE, SKIPPED
         from buildbot.status.builder import EXCEPTION, RETRY, Results
@@ -122,29 +105,9 @@ class OldImportPaths(unittest.TestCase):
         (SUCCESS, WARNINGS, FAILURE, SKIPPED, EXCEPTION, RETRY, Results,
          worst_status)
 
-    def test_status_builder_BuildStepStatus(self):
-        from buildbot.status.builder import BuildStepStatus
-        assert BuildStepStatus
-
     def test_status_builder_BuildSetStatus(self):
         from buildbot.status.builder import BuildSetStatus
         assert BuildSetStatus
-
-    def test_status_builder_TestResult(self):
-        from buildbot.status.builder import TestResult
-        assert TestResult
-
-    def test_status_builder_LogFile(self):
-        from buildbot.status.builder import LogFile
-        assert LogFile
-
-    def test_status_builder_HTMLLogFile(self):
-        from buildbot.status.builder import HTMLLogFile
-        assert HTMLLogFile
-
-    def test_status_builder_SlaveStatus(self):
-        from buildbot.status.builder import SlaveStatus
-        assert SlaveStatus
 
     def test_status_builder_Status(self):
         from buildbot.status.builder import Status
@@ -162,52 +125,16 @@ class OldImportPaths(unittest.TestCase):
         from buildbot.steps.source import Source
         assert Source
 
-    @deprecatedImport
-    def test_steps_source_CVS(self):
-        from buildbot.steps.source import CVS
-        assert CVS
+    def test_buildstep_remotecommand(self):
+        from buildbot.process.buildstep import RemoteCommand, \
+            LoggedRemoteCommand, RemoteShellCommand
+        assert RemoteCommand
+        assert LoggedRemoteCommand
+        assert RemoteShellCommand
 
-    @deprecatedImport
-    def test_steps_source_SVN(self):
-        from buildbot.steps.source import SVN
-        assert SVN
-
-    @deprecatedImport
-    def test_steps_source_Git(self):
-        from buildbot.steps.source import Git
-        assert Git
-
-    @deprecatedImport
-    def test_steps_source_Darcs(self):
-        from buildbot.steps.source import Darcs
-        assert Darcs
-
-    @deprecatedImport
-    def test_steps_source_Repo(self):
-        from buildbot.steps.source import Repo
-        assert Repo
-
-    @deprecatedImport
-    def test_steps_source_Bzr(self):
-        from buildbot.steps.source import Bzr
-        assert Bzr
-
-    @deprecatedImport
-    def test_steps_source_Mercurial(self):
-        from buildbot.steps.source import Mercurial
-        assert Mercurial
-
-    @deprecatedImport
-    def test_steps_source_P4(self):
-        from buildbot.steps.source import P4
-        assert P4
-
-    @deprecatedImport
-    def test_steps_source_Monotone(self):
-        from buildbot.steps.source import Monotone
-        assert Monotone
-
-    @deprecatedImport
-    def test_steps_source_BK(self):
-        from buildbot.steps.source import BK
-        assert BK
+    def test_buildstep_logobserver(self):
+        from buildbot.process.buildstep import LogObserver, \
+            LogLineObserver, OutputProgressObserver
+        assert LogObserver
+        assert LogLineObserver
+        assert OutputProgressObserver

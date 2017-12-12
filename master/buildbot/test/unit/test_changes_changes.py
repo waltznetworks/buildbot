@@ -13,25 +13,32 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
+import pprint
 import re
 import textwrap
 
+from twisted.internet import defer
+from twisted.trial import unittest
+
 from buildbot.changes import changes
 from buildbot.test.fake import fakedb
-from twisted.trial import unittest
+from buildbot.test.fake import fakemaster
 
 
 class Change(unittest.TestCase):
 
     change23_rows = [
         fakedb.Change(changeid=23, author="dustin", comments="fix whitespace",
-                      is_dir=0, branch="warnerdb", revision="deadbeef",
+                      branch="warnerdb", revision="deadbeef",
                       when_timestamp=266738404, revlink='http://warner/0e92a098b',
                       category='devel', repository='git://warner', codebase='mainapp',
                       project='Buildbot'),
 
         fakedb.ChangeFile(changeid=23, filename='master/README.txt'),
-        fakedb.ChangeFile(changeid=23, filename='slave/README.txt'),
+        fakedb.ChangeFile(changeid=23, filename='worker/README.txt'),
 
         fakedb.ChangeProperty(changeid=23, property_name='notest',
                               property_value='["no","Change"]'),
@@ -40,9 +47,9 @@ class Change(unittest.TestCase):
     ]
 
     def setUp(self):
+        self.master = fakemaster.make_master(testcase=self, wantDb=True)
         self.change23 = changes.Change(**dict(  # using **dict(..) forces kwargs
             category='devel',
-            isdir=0,
             repository=u'git://warner',
             codebase=u'mainapp',
             who=u'dustin',
@@ -52,9 +59,69 @@ class Change(unittest.TestCase):
             branch=u'warnerdb',
             revlink=u'http://warner/0e92a098b',
             properties={'notest': "no"},
-            files=[u'master/README.txt', u'slave/README.txt'],
+            files=[u'master/README.txt', u'worker/README.txt'],
             revision=u'deadbeef'))
         self.change23.number = 23
+
+        self.change24 = changes.Change(**dict(
+            category='devel',
+            repository=u'git://warner',
+            codebase=u'mainapp',
+            who=u'dustin',
+            when=266738405,
+            comments=u'fix whitespace again',
+            project=u'Buildbot',
+            branch=u'warnerdb',
+            revlink=u'http://warner/0e92a098c',
+            properties={'notest': "no"},
+            files=[u'master/README.txt', u'worker/README.txt'],
+            revision=u'deadbeef'))
+        self.change24.number = 24
+
+        self.change25 = changes.Change(**dict(
+            category='devel',
+            repository=u'git://warner',
+            codebase=u'mainapp',
+            who=u'dustin',
+            when=266738406,
+            comments=u'fix whitespace again',
+            project=u'Buildbot',
+            branch=u'warnerdb',
+            revlink=u'http://warner/0e92a098d',
+            properties={'notest': "no"},
+            files=[u'master/README.txt', u'worker/README.txt'],
+            revision=u'deadbeef'))
+        self.change25.number = 25
+
+    @defer.inlineCallbacks
+    def test_fromChdict(self):
+        # get a real honest-to-goodness chdict from the fake db
+        yield self.master.db.insertTestData(self.change23_rows)
+        chdict = yield self.master.db.changes.getChange(23)
+
+        exp = self.change23
+        got = yield changes.Change.fromChdict(self.master, chdict)
+
+        # compare
+        ok = True
+        ok = ok and got.number == exp.number
+        ok = ok and got.who == exp.who
+        ok = ok and sorted(got.files) == sorted(exp.files)
+        ok = ok and got.comments == exp.comments
+        ok = ok and got.revision == exp.revision
+        ok = ok and got.when == exp.when
+        ok = ok and got.branch == exp.branch
+        ok = ok and got.category == exp.category
+        ok = ok and got.revlink == exp.revlink
+        ok = ok and got.properties == exp.properties
+        ok = ok and got.repository == exp.repository
+        ok = ok and got.codebase == exp.codebase
+        ok = ok and got.project == exp.project
+        if not ok:
+            def printable(c):
+                return pprint.pformat(c.__dict__)
+            self.fail("changes do not match; expected\n%s\ngot\n%s" %
+                      (printable(exp), printable(got)))
 
     def test_str(self):
         string = str(self.change23)
@@ -65,7 +132,7 @@ class Change(unittest.TestCase):
         self.assertTrue(re.match(textwrap.dedent(u'''\
             Files:
              master/README.txt
-             slave/README.txt
+             worker/README.txt
             On: git://warner
             For: Buildbot
             At: .*
@@ -85,7 +152,7 @@ class Change(unittest.TestCase):
             'codebase': u'mainapp',
             'comments': u'fix whitespace',
             'files': [{'name': u'master/README.txt'},
-                      {'name': u'slave/README.txt'}],
+                      {'name': u'worker/README.txt'}],
             'number': 23,
             'project': u'Buildbot',
             'properties': [('notest', 'no', 'Change')],
@@ -112,3 +179,13 @@ class Change(unittest.TestCase):
 
     def test_getLogs(self):
         self.assertEqual(self.change23.getLogs(), {})
+
+    def test_compare(self):
+        self.assertEqual(self.change23, self.change23)
+        self.assertNotEqual(self.change24, self.change23)
+        self.assertGreater(self.change24, self.change23)
+        self.assertGreaterEqual(self.change24, self.change23)
+        self.assertGreaterEqual(self.change24, self.change24)
+        self.assertLessEqual(self.change24, self.change24)
+        self.assertLessEqual(self.change23, self.change24)
+        self.assertLess(self.change23, self.change25)

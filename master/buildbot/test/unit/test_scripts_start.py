@@ -13,21 +13,25 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import with_statement
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 import os
 import sys
 import time
-import twisted
 
-from buildbot.scripts import start
-from buildbot.test.util import compat
-from buildbot.test.util import dirs
-from buildbot.test.util import misc
-from buildbot.test.util.flaky import flaky
+import twisted
 from twisted.internet.utils import getProcessOutputAndValue
 from twisted.python import versions
 from twisted.trial import unittest
+
+from buildbot.scripts import start
+from buildbot.test.util import dirs
+from buildbot.test.util import misc
+from buildbot.test.util.decorators import flaky
+from buildbot.test.util.decorators import skipIfPythonVersionIsLess
+from buildbot.test.util.decorators import skipUnlessPlatformIs
 
 
 def mkconfig(**kwargs):
@@ -38,6 +42,7 @@ def mkconfig(**kwargs):
     }
     config.update(kwargs)
     return config
+
 
 fake_master_tac = """\
 from twisted.application import service
@@ -75,32 +80,35 @@ class TestStart(misc.StdoutAssertionsMixin, dirs.DirsMixin, unittest.TestCase):
     def runStart(self, **config):
         args = [
             '-c',
-            'from buildbot.scripts.start import start; start(%r)' % (mkconfig(**config),),
+            'from buildbot.scripts.start import start; start(%r)' % (
+                mkconfig(**config),),
         ]
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(sys.path)
         return getProcessOutputAndValue(sys.executable, args=args, env=env)
 
+    @skipIfPythonVersionIsLess((2, 7))
     def test_start_no_daemon(self):
         d = self.runStart(nodaemon=True)
 
         @d.addCallback
         def cb(res):
-            self.assertEquals(res, ('', '', 0))
-            print res
+            self.assertEqual(res, (b'', b'', 0))
+            print(res)
         return d
 
+    @skipIfPythonVersionIsLess((2, 7))
     def test_start_quiet(self):
         d = self.runStart(quiet=True)
 
         @d.addCallback
         def cb(res):
-            self.assertEquals(res, ('', '', 0))
-            print res
+            self.assertEqual(res, (b'', b'', 0))
+            print(res)
         return d
 
     @flaky(bugNumber=2760)
-    @compat.skipUnlessPlatformIs('posix')
+    @skipUnlessPlatformIs('posix')
     def test_start(self):
         d = self.runStart()
 

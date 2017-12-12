@@ -14,11 +14,10 @@
 # Copyright Buildbot Team Members
 
 import sys
-import twisted
 
-from buildbot.util import sautils
 from twisted.python import util
-from twisted.python import versions
+from builtins import int
+from future.utils import PY3
 
 
 def onlyOnce(fn):
@@ -38,66 +37,31 @@ def onlyOnce(fn):
 
 
 @onlyOnce
-def patch_bug4881():
-    # this patch doesn't apply (or even import!) on Windows
-    if sys.platform == 'win32':
-        return
-
-    # this bug was only present in Twisted-10.2.0
-    if twisted.version == versions.Version('twisted', 10, 2, 0):
-        from buildbot.monkeypatches import bug4881
-        bug4881.patch()
-
-
-@onlyOnce
-def patch_bug4520():
-    # this bug was patched in twisted-11.1.0, and only affects py26 and up
-    py_26 = (sys.version_info[0] > 2 or
-            (sys.version_info[0] == 2 and sys.version_info[1] >= 6))
-    if twisted.version < versions.Version('twisted', 11, 1, 0) and py_26:
-        from buildbot.monkeypatches import bug4520
-        bug4520.patch()
-
-
-@onlyOnce
-def patch_bug5079():
-    # this bug is patched in Twisted-12.0.0; it was probably
-    # present in Twisted-8.x.0, but the patch doesn't work
-    if (twisted.version < versions.Version('twisted', 12, 0, 0) and
-            twisted.version >= versions.Version('twisted', 9, 0, 0)):
-        from buildbot.monkeypatches import bug5079
-        bug5079.patch()
-
-
-@onlyOnce
-def patch_sqlalchemy2364():
-    # fix for SQLAlchemy bug 2364
-    if sautils.sa_version() < (0, 7, 5):
-        from buildbot.monkeypatches import sqlalchemy2364
-        sqlalchemy2364.patch()
-
-
-@onlyOnce
-def patch_sqlalchemy2189():
-    # fix for SQLAlchemy bug 2189
-    if sautils.sa_version() <= (0, 7, 1):
-        from buildbot.monkeypatches import sqlalchemy2189
-        sqlalchemy2189.patch()
-
-
-@onlyOnce
-def patch_gatherResults():
-    if twisted.version < versions.Version('twisted', 11, 1, 0):
-        from buildbot.monkeypatches import gatherResults
-        gatherResults.patch()
-
-
-@onlyOnce
 def patch_python14653():
     # this bug was fixed in Python 2.7.4: http://bugs.python.org/issue14653
     if sys.version_info[:3] < (2, 7, 4):
         from buildbot.monkeypatches import python14653
         python14653.patch()
+
+
+@onlyOnce
+def patch_twisted9127():
+    if PY3:
+        from buildbot.monkeypatches import twisted9127
+        twisted9127.patch()
+
+
+@onlyOnce
+def patch_testcase_timeout():
+    import unittest
+    import os
+    # any test that should take more than 5 second should be annotated so.
+    unittest.TestCase.timeout = 5
+
+    # but we know that the DB tests are very slow, so we increase a bit that value for
+    # real database tests
+    if os.environ.get("BUILDBOT_TEST_DB_URL", None) is not None:
+        unittest.TestCase.timeout = 120
 
 
 @onlyOnce
@@ -107,29 +71,23 @@ def patch_servicechecks():
 
 
 @onlyOnce
-def patch_testcase_patch():
-    # Twisted-9.0.0 and earlier did not have a UnitTest.patch that worked on
-    # Python-2.7
-    if twisted.version.major <= 9 and sys.version_info[:2] == (2, 7):
-        from buildbot.monkeypatches import testcase_patch
-        testcase_patch.patch()
+def patch_mysqlclient_warnings():
+    try:
+        from _mysql_exceptions import Warning
+        # MySQLdb.compat is only present in mysqlclient
+        import MySQLdb.compat  # noqa pylint: disable=unused-import
+    except ImportError:
+        return
+    # workaround for https://twistedmatrix.com/trac/ticket/9005
+    # mysqlclient is easier to patch than twisted
+    # we swap _mysql_exceptions.Warning arguments so that the code is in second place
 
-
-@onlyOnce
-def patch_testcase_synctest():
-    if twisted.version.major < 13 or (
-            twisted.version.major == 13 and twisted.version.minor == 0):
-        from buildbot.monkeypatches import testcase_synctest
-        testcase_synctest.patch()
-
-
-@onlyOnce
-def patch_testcase_assert_raises_regexp():
-    # pythons before 2.7 does not have TestCase.assertRaisesRegexp() method
-    # add our local implementation if needed
-    if sys.version_info[:2] < (2, 7):
-        from buildbot.monkeypatches import testcase_assert
-        testcase_assert.patch()
+    def patched_init(self, *args):
+        if isinstance(args[0], int):
+            super(Warning, self).__init__("{} {}".format(args[0], args[1]))
+        else:
+            super(Warning, self).__init__(*args)
+    Warning.__init__ = patched_init
 
 
 @onlyOnce
@@ -138,18 +96,37 @@ def patch_decorators():
     decorators.patch()
 
 
+@onlyOnce
+def patch_config_for_unit_tests():
+    from buildbot import config
+    # by default, buildbot.config warns about not configured buildbotNetUsageData.
+    # its important for users to not leak information, but unneeded and painful for tests
+    config._in_unit_tests = True
+
+
+@onlyOnce
+def patch_unittest_testcase():
+    from twisted.trial.unittest import TestCase
+
+    # In Python 3.2,
+    # - assertRaisesRegexp() was renamed to assertRaisesRegex(),
+    #   and assertRaisesRegexp() was deprecated.
+    # - assertRegexpMatches() was renamed to assertRegex()
+    #   and assertRegexpMatches() was deprecated.
+    if not getattr(TestCase, "assertRaisesRegex", None):
+        TestCase.assertRaisesRegex = TestCase.assertRaisesRegexp
+    if not getattr(TestCase, "assertRegex", None):
+        TestCase.assertRegex = TestCase.assertRegexpMatches
+
+
 def patch_all(for_tests=False):
     if for_tests:
         patch_servicechecks()
-        patch_testcase_patch()
-        patch_testcase_synctest()
-        patch_testcase_assert_raises_regexp()
+        patch_testcase_timeout()
         patch_decorators()
+        patch_mysqlclient_warnings()
+        patch_config_for_unit_tests()
+        patch_unittest_testcase()
 
-    patch_bug4881()
-    patch_bug4520()
-    patch_bug5079()
-    patch_sqlalchemy2364()
-    patch_sqlalchemy2189()
-    patch_gatherResults()
     patch_python14653()
+    patch_twisted9127()

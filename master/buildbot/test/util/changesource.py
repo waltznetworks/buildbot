@@ -13,11 +13,13 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import absolute_import
+from __future__ import print_function
 
-from buildbot.test.fake.fakemaster import make_master
 from twisted.internet import defer
-from twisted.trial import unittest
+from twisted.internet import task
+
+from buildbot.test.fake import fakemaster
 
 
 class ChangeSourceMixin(object):
@@ -26,55 +28,75 @@ class ChangeSourceMixin(object):
     This class is used for testing change sources, and handles a few things:
 
      - starting and stopping a ChangeSource service
-     - a fake C{self.master.addChange}, which adds its args
-       to the list C{self.changes_added}
+     - a fake master with a data API implementation
     """
 
     changesource = None
     started = False
 
+    DUMMY_CHANGESOURCE_ID = 20
+    OTHER_MASTER_ID = 93
+    DEFAULT_NAME = "ChangeSource"
+
     def setUpChangeSource(self):
         "Set up the mixin - returns a deferred."
-        self.changes_added = []
-
-        def addChange(**kwargs):
-            # check for 8-bit strings
-            for k, v in kwargs.items():
-                if isinstance(v, type("")):
-                    try:
-                        v.decode('ascii')
-                    except UnicodeDecodeError:
-                        raise unittest.FailTest(
-                            "non-ascii string for key '%s': %r" % (k, v))
-            self.changes_added.append(kwargs)
-            return defer.succeed(mock.Mock())
-        self.master = make_master(testcase=self, wantDb=True)
-        self.master.addChange = addChange
+        self.master = fakemaster.make_master(wantDb=True, wantData=True,
+                                             testcase=self)
+        assert not hasattr(self.master, 'addChange')  # just checking..
         return defer.succeed(None)
 
+    @defer.inlineCallbacks
     def tearDownChangeSource(self):
         "Tear down the mixin - returns a deferred."
         if not self.started:
-            return defer.succeed(None)
+            return
         if self.changesource.running:
-            return defer.maybeDeferred(self.changesource.stopService)
-        return defer.succeed(None)
+            yield defer.maybeDeferred(self.changesource.stopService)
+        yield self.changesource.disownServiceParent()
+        return
 
     def attachChangeSource(self, cs):
         "Set up a change source for testing; sets its .master attribute"
         self.changesource = cs
-        self.changesource.master = self.master
+        # FIXME some changesource does not have master property yet but
+        # mailchangesource has :-/
+        try:
+            self.changesource.master = self.master
+        except AttributeError:
+            self.changesource.setServiceParent(self.master)
+
+        # also, now that changesources are ClusteredServices, setting up
+        # the clock here helps in the unit tests that check that behavior
+        self.changesource.clock = task.Clock()
 
     def startChangeSource(self):
         "start the change source as a service"
         self.started = True
-        self.changesource.startService()
+        return self.changesource.startService()
 
     def stopChangeSource(self):
         "stop the change source again; returns a deferred"
         d = self.changesource.stopService()
 
+        @d.addCallback
         def mark_stopped(_):
             self.started = False
-        d.addCallback(mark_stopped)
         return d
+
+    def setChangeSourceToMaster(self, otherMaster):
+        # some tests build the CS late, so for those tests we will require that
+        # they use the default name in order to run tests that require master
+        # assignments
+        if self.changesource is not None:
+            name = self.changesource.name
+        else:
+            name = self.DEFAULT_NAME
+
+        self.master.data.updates.changesourceIds[
+            name] = self.DUMMY_CHANGESOURCE_ID
+        if otherMaster:
+            self.master.data.updates.changesourceMasters[
+                self.DUMMY_CHANGESOURCE_ID] = otherMaster
+        else:
+            del self.master.data.updates.changesourceMasters[
+                self.DUMMY_CHANGESOURCE_ID]

@@ -13,10 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import functools
 
 from twisted.internet import defer
-from twisted.internet import reactor
 from twisted.python import log
 
 # debounce phases
@@ -28,9 +30,9 @@ PH_RUNNING_QUEUED = 3
 
 class Debouncer(object):
     __slots__ = ['phase', 'timer', 'wait', 'function', 'stopped',
-                 'completeDeferreds', '_reactor']
+                 'completeDeferreds', 'get_reactor']
 
-    def __init__(self, wait, function):
+    def __init__(self, wait, function, get_reactor):
         # time to wait
         self.wait = wait
         # zero-argument callable to invoke
@@ -44,23 +46,25 @@ class Debouncer(object):
         # deferreds to fire when the call is complete
         self.completeDeferreds = None
         # for tests
-        self._reactor = reactor
+        self.get_reactor = get_reactor
 
     def __call__(self):
-        log.msg('invoked, stop=' + str(self.stopped))
         if self.stopped:
             return
         phase = self.phase
         if phase == PH_IDLE:
-            self.timer = self._reactor.callLater(self.wait, self.invoke)
+            self.timer = self.get_reactor().callLater(self.wait, self.invoke)
             self.phase = PH_WAITING
         elif phase == PH_RUNNING:
             self.phase = PH_RUNNING_QUEUED
         else:  # phase == PH_WAITING or phase == PH_RUNNING_QUEUED:
             pass
 
+    def __repr__(self):
+        return "<debounced %r, wait=%r, phase=%d>" % (self.function,
+                                                      self.wait, self.phase)
+
     def invoke(self):
-        log.msg('invoke')
         self.phase = PH_RUNNING
         self.completeDeferreds = []
         d = defer.maybeDeferred(self.function)
@@ -82,8 +86,9 @@ class Debouncer(object):
         self.stopped = True
         if self.phase == PH_WAITING:
             self.timer.cancel()
-            self.phase = PH_IDLE
-        elif self.phase in (PH_RUNNING, PH_RUNNING_QUEUED):
+            self.invoke()
+            # fall through with PH_RUNNING
+        if self.phase in (PH_RUNNING, PH_RUNNING_QUEUED):
             d = defer.Deferred()
             self.completeDeferreds.append(d)
             return d
@@ -92,22 +97,28 @@ class Debouncer(object):
 
 class _Descriptor(object):
 
-    def __init__(self, fn, wait, attrName):
+    def __init__(self, fn, wait, attrName, get_reactor):
         self.fn = fn
         self.wait = wait
         self.attrName = attrName
+        self.get_reactor = get_reactor
 
     def __get__(self, instance, cls):
         try:
             db = getattr(instance, self.attrName)
         except AttributeError:
-            db = Debouncer(self.wait, functools.partial(self.fn, instance))
+            db = Debouncer(self.wait, functools.partial(self.fn, instance),
+                           functools.partial(self.get_reactor, instance))
             setattr(instance, self.attrName, db)
         return db
 
 
-def method(wait):
+def _get_reactor_from_master(o):
+    return o.master.reactor
+
+
+def method(wait, get_reactor=_get_reactor_from_master):
     def wrap(fn):
         stateName = "__debounce_" + fn.__name__ + "__"
-        return _Descriptor(fn, wait, stateName)
+        return _Descriptor(fn, wait, stateName, get_reactor)
     return wrap

@@ -13,14 +13,19 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+from future.builtins import range
+
 import re
 import sys
 
-from buildbot.process.buildstep import LogLineObserver
-from buildbot.steps.shell import Test
 from twisted.enterprise import adbapi
 from twisted.internet import defer
 from twisted.python import log
+
+from buildbot.process.buildstep import LogLineObserver
+from buildbot.steps.shell import Test
 
 
 class EqConnectionPool(adbapi.ConnectionPool):
@@ -48,8 +53,7 @@ are more suitable for use in MTR.
     def __eq__(self, other):
         if isinstance(other, EqConnectionPool):
             return self._eqKey == other._eqKey
-        else:
-            return False
+        return False
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -84,13 +88,16 @@ class MtrLogObserver(LogLineObserver):
     It counts number of tests run and uses it to provide more accurate
     completion estimates.
 
-    It parses out test failures from the output and summarises the results on
+    It parses out test failures from the output and summarizes the results on
     the Waterfall page. It also passes the information to methods that can be
     overridden in a subclass to do further processing on the information."""
 
-    _line_re = re.compile(r"^([-._0-9a-zA-z]+)( '[-_ a-zA-Z]+')?\s+(w[0-9]+\s+)?\[ (fail|pass) \]\s*(.*)$")
-    _line_re2 = re.compile(r"^[-._0-9a-zA-z]+( '[-_ a-zA-Z]+')?\s+(w[0-9]+\s+)?\[ [-a-z]+ \]")
-    _line_re3 = re.compile(r"^\*\*\*Warnings generated in error logs during shutdown after running tests: (.*)")
+    _line_re = re.compile(
+        r"^([-._0-9a-zA-z]+)( '[-_ a-zA-Z]+')?\s+(w[0-9]+\s+)?\[ (fail|pass) \]\s*(.*)$")
+    _line_re2 = re.compile(
+        r"^[-._0-9a-zA-z]+( '[-_ a-zA-Z]+')?\s+(w[0-9]+\s+)?\[ [-a-z]+ \]")
+    _line_re3 = re.compile(
+        r"^\*\*\*Warnings generated in error logs during shutdown after running tests: (.*)")
     _line_re4 = re.compile(r"^The servers were restarted [0-9]+ times$")
     _line_re5 = re.compile(r"^Only\s+[0-9]+\s+of\s+[0-9]+\s+completed.$")
 
@@ -123,30 +130,32 @@ class MtrLogObserver(LogLineObserver):
                     variant = ""
                 else:
                     variant = variant[2:-1]
-                self.openTestFail(testname, variant, result, info, stripLine + "\n")
+                self.openTestFail(
+                    testname, variant, result, info, stripLine + "\n")
 
         else:
             m = self._line_re3.search(stripLine)
+
+            # pylint: disable=too-many-boolean-expressions
+
             if m:
                 stuff = m.group(1)
                 self.closeTestFail()
                 testList = stuff.split(" ")
                 self.doCollectWarningTests(testList)
-
             elif (self._line_re2.search(stripLine) or
                   self._line_re4.search(stripLine) or
                   self._line_re5.search(stripLine) or
                   stripLine == "Test suite timeout! Terminating..." or
                   stripLine.startswith("mysql-test-run: *** ERROR: Not all tests completed") or
-                  (stripLine.startswith("------------------------------------------------------------")
-                   and self.testFail is not None)):
+                  (stripLine.startswith("-" * 60) and self.testFail is not None)):
                 self.closeTestFail()
-
             else:
                 self.addTestFailOutput(stripLine + "\n")
 
     def openTestFail(self, testname, variant, result, info, line):
-        self.testFail = MtrTestFailData(testname, variant, result, info, line, self.doCollectTestFail)
+        self.testFail = MtrTestFailData(
+            testname, variant, result, info, line, self.doCollectTestFail)
 
     def addTestFailOutput(self, line):
         if self.testFail is not None:
@@ -176,8 +185,7 @@ class MtrLogObserver(LogLineObserver):
             text.append(self.testType)
         fails = sorted(self.failList[:])
         self.addToText(fails, text)
-        warns = self.warnList[:]
-        warns.sort()
+        warns = sorted(self.warnList[:])
         self.addToText(warns, text)
         return text
 
@@ -192,7 +200,8 @@ class MtrLogObserver(LogLineObserver):
         displayTestName = self.strip_re.sub("", testname)
 
         if len(displayTestName) > self.testNameLimit:
-            displayTestName = displayTestName[:(self.testNameLimit - 2)] + "..."
+            displayTestName = displayTestName[
+                :(self.testNameLimit - 2)] + "..."
         return displayTestName
 
     def doCollectTestFail(self, testname, variant, result, info, text):
@@ -222,7 +231,7 @@ class MTR(Test):
 
     It uses class MtrLogObserver to parse test results out from the
     output of mysql-test-run.pl, providing better completion time
-    estimates and summarising test failures on the waterfall page.
+    estimates and summarizing test failures on the waterfall page.
 
     It also provides access to mysqld server error logs from the test
     run to help debugging any problems.
@@ -245,7 +254,7 @@ class MTR(Test):
         Value of --parallel option used for mysql-test-run.pl (number
         of processes used to run the test suite in parallel). Defaults
         to 4. This is used to determine the number of server error log
-        files to download from the slave. Specifying a too high value
+        files to download from the worker. Specifying a too high value
         does not hurt (as nonexisting error logs will be ignored),
         however if using --parallel value greater than the default it
         needs to be specified, or some server error logs will be
@@ -279,9 +288,12 @@ class MTR(Test):
     def __init__(self, dbpool=None, test_type=None, test_info="",
                  description=None, descriptionDone=None,
                  autoCreateTables=False, textLimit=5, testNameLimit=16,
-                 parallel=4, logfiles={}, lazylogfiles=True,
+                 parallel=4, logfiles=None, lazylogfiles=True,
                  warningPattern="MTR's internal check of the test case '.*' failed",
                  mtr_subdir="mysql-test", **kwargs):
+
+        if logfiles is None:
+            logfiles = {}
 
         if description is None:
             description = ["testing"]
@@ -352,7 +364,8 @@ class MTR(Test):
                     if retryCount >= 5:
                         raise
                     excType, excValue, excTraceback = sys.exc_info()
-                    log.msg("Database transaction failed (caught exception %s(%s)), retrying ..." % (excType, excValue))
+                    log.msg("Database transaction failed (caught exception %s(%s)), retrying ..." % (
+                        excType, excValue))
                     txn.close()
                     txn.reconnect()
                     txn.reopen()
@@ -376,8 +389,7 @@ class MTR(Test):
     def registerInDB(self):
         if self.dbpool:
             return self.runInteractionWithRetry(self.doRegisterInDB)
-        else:
-            return defer.succeed(0)
+        return defer.succeed(0)
 
     # The real database work is done in a thread in a synchronous way.
     def doRegisterInDB(self, txn):
@@ -450,9 +462,10 @@ VALUES (%s, %s, %s, CURRENT_TIMESTAMP(), %s, %s, %s)
         def collectTestFail(self, testname, variant, result, info, text):
             # Insert asynchronously into database.
             dbpool = self.step.dbpool
-            run_id = self.step.getProperty("mtr_id")
             if dbpool is None:
                 return defer.succeed(None)
+
+            run_id = self.step.getProperty("mtr_id")
             if variant is None:
                 variant = ""
             d = self.step.runQueryWithRetry("""
@@ -468,6 +481,7 @@ VALUES (%s, %s, %s, %s, %s)
             dbpool = self.step.dbpool
             if dbpool is None:
                 return defer.succeed(None)
+
             run_id = self.step.getProperty("mtr_id")
             warn_id = self.step.getProperty("mtr_warn_id")
             self.step.setProperty("mtr_warn_id", warn_id + 1)

@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from twisted.internet import defer
 from twisted.python import log
 from twisted.trial import unittest
@@ -43,9 +46,9 @@ class Eventually(unittest.TestCase):
     def assertResults(self, exp):
         d = eventual.flushEventualQueue()
 
+        @d.addCallback
         def cb(_):
             self.assertEqual(self.results, exp)
-        d.addCallback(cb)
         return d
 
     # tests
@@ -69,7 +72,7 @@ class Eventually(unittest.TestCase):
 
     def test_eventually_butNotNow(self):
         eventual.eventually(self.cb, 1)
-        self.failIf(self.results != [])
+        self.assertFalse(self.results != [])
         return self.assertResults([(1,)])
 
     def test_eventually_order(self):

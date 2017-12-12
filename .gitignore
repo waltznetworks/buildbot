@@ -12,7 +12,7 @@
 MANIFEST
 _trial_temp*
 dist
-build
+build/
 .build
 *.egg-info
 master/docs/buildbot.html
@@ -23,6 +23,7 @@ master/docs/buildbot.info-2
 .project
 .pydevproject
 .settings
+*/build/
 master/docs/buildbot
 master/docs/version.texinfo
 master/docs/docs.tgz
@@ -30,10 +31,15 @@ master/docs/latest
 twisted/plugins/dropin.cache
 .coverage
 coverage-html
-apidocs/reference
-apidocs/reference.tgz
-common/googlecode_upload.py
 master/docs/tutorial/_build
 _build
-.tox
-/www
+# tox
+.tox/
+# downloaded by setup_requires eggs
+*.egg
+.eggs/
+master/setuptools_trial*
+master/buildbot/www/static/js/default/
+sandbox
+.idea/
+/.venv/

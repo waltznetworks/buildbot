@@ -13,6 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 from buildbot.steps.source.git import Git
 
 
@@ -23,7 +26,15 @@ class Gerrit(Git):
 
     def startVC(self, branch, revision, patch):
         gerrit_branch = None
-        if self.build.hasProperty("event.patchSet.ref"):
+
+        changed_project = self.build.getProperty('event.change.project')
+        if (not self.sourcestamp or (self.sourcestamp.project !=
+                                     changed_project)):
+            # If we don't have a sourcestamp, or the project is  wrong, this
+            # isn't the repo that's changed.  Drop through and check out the
+            # head of the given branch
+            pass
+        elif self.build.hasProperty("event.patchSet.ref"):
             gerrit_branch = self.build.getProperty("event.patchSet.ref")
             self.updateSourceProperty("gerrit_branch", gerrit_branch)
         else:
@@ -33,7 +44,7 @@ class Gerrit(Git):
                     gerrit_branch = "refs/changes/%2.2d/%d/%d" \
                         % (int(change[0]) % 100, int(change[0]), int(change[1]))
                     self.updateSourceProperty("gerrit_branch", gerrit_branch)
-            except:
+            except Exception:
                 pass
 
         branch = gerrit_branch or branch

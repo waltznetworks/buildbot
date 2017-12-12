@@ -13,20 +13,23 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import absolute_import
+from __future__ import print_function
+
 import time
 
-from buildbot.status.results import FAILURE
-from buildbot.status.results import RETRY
-from buildbot.status.results import SUCCESS
-from buildbot.steps import shell
+from twisted.internet import error
+from twisted.trial import unittest
+
+from buildbot.process import remotetransfer
+from buildbot.process.results import FAILURE
+from buildbot.process.results import RETRY
+from buildbot.process.results import SUCCESS
 from buildbot.steps.source import cvs
-from buildbot.steps.transfer import _FileReader
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectRemoteRef
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import sourcesteps
-from twisted.internet import error
-from twisted.trial import unittest
 
 
 def uploadString(cvsroot):
@@ -75,9 +78,12 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
     def test_cvsEntriesContainStickyDates(self):
         step = cvs.CVS(cvsroot="x", cvsmodule="m", mode='full', method='clean')
         self.assertEqual(step._cvsEntriesContainStickyDates('D'), False)
-        self.assertEqual(step._cvsEntriesContainStickyDates('/file/1.1/Fri May 17 23:20:00//TMOZILLA_1_0_0_BRANCH\nD'), False)
-        self.assertEqual(step._cvsEntriesContainStickyDates('/file/1.1/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'), True)
-        self.assertEqual(step._cvsEntriesContainStickyDates('/file1/1.1/Fri May 17 23:20:00//\n/file2/1.1.2.3/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'), True)
+        self.assertEqual(step._cvsEntriesContainStickyDates(
+            '/file/1.1/Fri May 17 23:20:00//TMOZILLA_1_0_0_BRANCH\nD'), False)
+        self.assertEqual(step._cvsEntriesContainStickyDates(
+            '/file/1.1/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'), True)
+        self.assertEqual(step._cvsEntriesContainStickyDates(
+            '/file1/1.1/Fri May 17 23:20:00//\n/file2/1.1.2.3/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'), True)
 
     def test_mode_full_clean_and_login(self):
         self.setupStep(
@@ -99,19 +105,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard'])
@@ -121,7 +130,58 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS, state_string="update")
+        self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
+        return self.runStep()
+
+    def test_mode_full_clean_and_login_worker_2_16(self):
+        self.setupStep(
+            cvs.CVS(cvsroot=":pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot",
+                    cvsmodule="mozilla/browser/", mode='full', method='clean',
+                    login="a password"),
+            worker_version={'*': '2.16'})
+
+        self.expectCommands(
+            ExpectShell(workdir='wkdir',
+                        command=['cvs', '--version'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvs',
+                                 '-d',
+                                 ':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot',
+                                 'login'],
+                        initialStdin="a password\n")
+            + 0,
+            Expect('stat', dict(file='wkdir/.buildbot-patched',
+                                logEnviron=True))
+            + 1,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+            + 0,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            + Expect.behavior(uploadString('mozilla/browser/'))
+            + 0,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvsdiscard'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvs', '-z3', 'update', '-dP'])
+            + 0,
+        )
+
+        self.expectOutcome(result=SUCCESS, state_string="update")
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -141,19 +201,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                         command=['cvsdiscard'])
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard'])
@@ -162,12 +225,78 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                         command=['cvs', '-z3', 'update', '-dP'])
             + 0,
             Expect('downloadFile', dict(blocksize=16384, maxsize=None,
-                                        reader=ExpectRemoteRef(_FileReader),
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.StringFileReader),
+                                        workerdest='.buildbot-diff', workdir='wkdir',
+                                        mode=None))
+            + 0,
+            Expect('downloadFile', dict(blocksize=16384, maxsize=None,
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.StringFileReader),
+                                        workerdest='.buildbot-patched', workdir='wkdir',
+                                        mode=None))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['patch', '-p1', '--remove-empty-files',
+                                 '--force', '--forward', '-i', '.buildbot-diff'])
+            + 0,
+            Expect('rmdir', dict(dir='wkdir/.buildbot-diff',
+                                 logEnviron=True))
+            + 0,
+        )
+        self.expectOutcome(result=SUCCESS)
+        self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
+        return self.runStep()
+
+    def test_mode_full_clean_patch_worker_2_16(self):
+        self.setupStep(
+            cvs.CVS(cvsroot=":pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot",
+                    cvsmodule="mozilla/browser/", mode='full', method='clean'),
+            patch=(1, 'patch'),
+            worker_version={'*': '2.16'})
+        self.expectCommands(
+            ExpectShell(workdir='wkdir',
+                        command=['cvs', '--version'])
+            + 0,
+            Expect('stat', dict(file='wkdir/.buildbot-patched',
+                                logEnviron=True))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvsdiscard'])
+            + 0,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+            + 0,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            + Expect.behavior(uploadString('mozilla/browser/'))
+            + 0,
+            Expect('uploadFile', dict(blocksize=32768, maxsize=None,
+                                      slavesrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvsdiscard'])
+            + 0,
+            ExpectShell(workdir='wkdir',
+                        command=['cvs', '-z3', 'update', '-dP'])
+            + 0,
+            Expect('downloadFile', dict(blocksize=16384, maxsize=None,
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.StringFileReader),
                                         slavedest='.buildbot-diff', workdir='wkdir',
                                         mode=None))
             + 0,
             Expect('downloadFile', dict(blocksize=16384, maxsize=None,
-                                        reader=ExpectRemoteRef(_FileReader),
+                                        reader=ExpectRemoteRef(
+                                            remotetransfer.StringFileReader),
                                         slavedest='.buildbot-patched', workdir='wkdir',
                                         mode=None))
             + 0,
@@ -176,10 +305,10 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '--force', '--forward', '-i', '.buildbot-diff'])
             + 0,
             Expect('rmdir', dict(dir='wkdir/.buildbot-diff',
-                                 logEnviron=True, timeout=1200))
+                                 logEnviron=True))
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -197,19 +326,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         timeout=1,
@@ -221,7 +353,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -238,19 +370,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard'])
@@ -260,7 +395,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -277,19 +412,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard'])
@@ -299,7 +437,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -315,19 +453,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard', '--ignore'])
@@ -337,7 +478,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -364,7 +505,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -412,7 +553,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -432,19 +573,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  timeout=step.timeout))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='source/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='source/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='source/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='source/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='source/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='source/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='source',
                         command=['cvs', '-z3', 'update', '-dP'])
@@ -454,7 +598,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -474,8 +618,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  timeout=step.timeout))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='source/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='source/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('the-end-of-the-universe'))
             + 0,
             Expect('rmdir', dict(dir='source',
@@ -493,7 +637,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -509,26 +653,29 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP'])
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -544,19 +691,23 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString('/file/1.1/Fri May 17 23:20:00//D2013.10.08.11.20.33\nD'))
             + 0,
             Expect('rmdir', dict(dir='wkdir',
                                  logEnviron=True,
@@ -570,7 +721,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -586,20 +737,21 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             # on Windows, this file does not contain the password, per
             # http://trac.buildbot.net/ticket/2355
-            + Expect.behavior(uploadString(':pserver:dustin@cvs-mirror.mozilla.org:/cvsroot'))
+            + Expect.behavior(
+                uploadString(':pserver:dustin@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
@@ -607,7 +759,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         return self.runStep()
 
     def test_mode_incremental_branch(self):
@@ -623,26 +775,29 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP', '-r', 'my_branch'])
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -660,28 +815,32 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP',
-                                 # note, no -r HEAD here - that's the special case
+                                 # note, no -r HEAD here - that's the special
+                                 # case
                                  '-D', '2012-08-16 16:05:16 +0000'])
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         return self.runStep()
 
     def test_mode_incremental_branch_sourcestamp(self):
@@ -697,26 +856,29 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP', '-r', 'my_branch'])
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -732,26 +894,29 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP'])
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -767,8 +932,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
                                  logEnviron=True,
@@ -781,7 +946,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -798,8 +963,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
                                  logEnviron=True,
@@ -822,7 +987,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -838,8 +1003,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('the-end-of-the-universe'))
             + 0,
             Expect('rmdir', dict(dir='wkdir',
@@ -853,7 +1018,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -869,13 +1034,15 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('the-end-of-the-universe'))
             + 0,
             Expect('rmdir', dict(dir='wkdir',
@@ -889,7 +1056,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -905,8 +1072,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + 1,
             ExpectShell(workdir='',
                         command=['cvs',
@@ -915,7 +1082,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -931,8 +1098,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('the-end-of-the-universe'))
             + 0,
             ExpectShell(workdir='',
@@ -942,7 +1109,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -958,19 +1125,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard', '--ignore'])
@@ -980,7 +1150,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -997,8 +1167,8 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + 1,
             Expect('rmdir', dict(dir='wkdir',
                                  logEnviron=True,
@@ -1010,7 +1180,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                  '-z3', 'checkout', '-d', 'wkdir', '-l', 'mozilla/browser/'])
             + 0,
         )
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -1029,19 +1199,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=False))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvs', '-z3', 'update', '-dP'],
@@ -1050,7 +1223,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 0,
         )
 
-        self.expectOutcome(result=SUCCESS, status_text=["update"])
+        self.expectOutcome(result=SUCCESS)
         self.expectProperty('got_revision', '2012-09-09 12:00:39 +0000', 'CVS')
         return self.runStep()
 
@@ -1064,7 +1237,7 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 128,
         )
 
-        self.expectOutcome(result=FAILURE, status_text=["updating"])
+        self.expectOutcome(result=FAILURE)
         return self.runStep()
 
     def test_cvsdiscard_fails(self):
@@ -1079,19 +1252,22 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
                                 logEnviron=True))
             + 1,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Root', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
+                                      workersrc='Root', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(
+                uploadString(':pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Repository', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
+                                      workersrc='Repository', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
             + Expect.behavior(uploadString('mozilla/browser/'))
             + 0,
             Expect('uploadFile', dict(blocksize=32768, maxsize=None,
-                                      slavesrc='Entries', workdir='wkdir/CVS',
-                                      writer=ExpectRemoteRef(shell.StringFileWriter)))
-            + Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
+                                      workersrc='Entries', workdir='wkdir/CVS',
+                                      writer=ExpectRemoteRef(remotetransfer.StringFileWriter)))
+            +
+            Expect.behavior(uploadString('/file/1.1/Fri May 17 23:20:00//\nD'))
             + 0,
             ExpectShell(workdir='wkdir',
                         command=['cvsdiscard', '--ignore'])
@@ -1100,10 +1276,10 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + 1,
         )
 
-        self.expectOutcome(result=FAILURE, status_text=["updating"])
+        self.expectOutcome(result=FAILURE)
         return self.runStep()
 
-    def test_slave_connection_lost(self):
+    def test_worker_connection_lost(self):
         self.setupStep(
             cvs.CVS(cvsroot=":pserver:anonymous@cvs-mirror.mozilla.org:/cvsroot",
                     cvsmodule="mozilla/browser/", mode='full', method='clean'))
@@ -1113,6 +1289,5 @@ class TestCVS(sourcesteps.SourceStepMixin, unittest.TestCase):
             + ('err', error.ConnectionLost()),
         )
 
-        self.expectOutcome(result=RETRY,
-                           status_text=["update", "exception", "slave", "lost"])
+        self.expectOutcome(result=RETRY, state_string="update (retry)")
         return self.runStep()

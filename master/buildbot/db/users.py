@@ -13,8 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
-import sqlalchemy as sa
+from __future__ import absolute_import
+from __future__ import print_function
 
+import sqlalchemy as sa
 from sqlalchemy.sql.expression import and_
 
 from buildbot.db import base
@@ -26,16 +28,18 @@ class UsDict(dict):
 
 
 class UsersConnectorComponent(base.DBConnectorComponent):
-    # Documentation is in developer/database.rst
+    # Documentation is in developer/db.rst
 
     def findUserByAttr(self, identifier, attr_type, attr_data, _race_hook=None):
+        # note that since this involves two tables, self.findSomethingId is not
+        # helpful
         def thd(conn, no_recurse=False, identifier=identifier):
             tbl = self.db.model.users
             tbl_info = self.db.model.users_info
 
-            self.check_length(tbl.c.identifier, identifier)
-            self.check_length(tbl_info.c.attr_type, attr_type)
-            self.check_length(tbl_info.c.attr_data, attr_data)
+            self.checkLength(tbl.c.identifier, identifier)
+            self.checkLength(tbl_info.c.attr_type, attr_type)
+            self.checkLength(tbl_info.c.attr_data, attr_data)
 
             # try to find the user
             q = sa.select([tbl_info.c.uid],
@@ -75,7 +79,8 @@ class UsersConnectorComponent(base.DBConnectorComponent):
                 # if we failed to insert the user, then it's because the
                 # identifier wasn't unique
                 if not inserted_user:
-                    identifier = identifiers.incrementIdentifier(256, identifier)
+                    identifier = identifiers.incrementIdentifier(
+                        256, identifier)
                 else:
                     no_recurse = True
 
@@ -97,25 +102,28 @@ class UsersConnectorComponent(base.DBConnectorComponent):
             if not users_row:
                 return None
 
-            # make UsDict to return
-            usdict = UsDict()
-
             # gather all attr_type and attr_data entries from users_info table
             q = tbl_info.select(whereclause=(tbl_info.c.uid == uid))
             rows = conn.execute(q).fetchall()
-            for row in rows:
-                usdict[row.attr_type] = row.attr_data
 
-            # add the users_row data *after* the attributes in case attr_type
-            # matches one of these keys.
-            usdict['uid'] = users_row.uid
-            usdict['identifier'] = users_row.identifier
-            usdict['bb_username'] = users_row.bb_username
-            usdict['bb_password'] = users_row.bb_password
-
-            return usdict
+            return self.thd_createUsDict(users_row, rows)
         d = self.db.pool.do(thd)
         return d
+
+    def thd_createUsDict(self, users_row, rows):
+        # make UsDict to return
+        usdict = UsDict()
+        for row in rows:
+            usdict[row.attr_type] = row.attr_data
+
+        # add the users_row data *after* the attributes in case attr_type
+        # matches one of these keys.
+        usdict['uid'] = users_row.uid
+        usdict['identifier'] = users_row.identifier
+        usdict['bb_username'] = users_row.bb_username
+        usdict['bb_password'] = users_row.bb_password
+
+        return usdict
 
     def getUserByUsername(self, username):
         def thd(conn):
@@ -128,23 +136,11 @@ class UsersConnectorComponent(base.DBConnectorComponent):
             if not users_row:
                 return None
 
-            # make UsDict to return
-            usdict = UsDict()
-
             # gather all attr_type and attr_data entries from users_info table
             q = tbl_info.select(whereclause=(tbl_info.c.uid == users_row.uid))
             rows = conn.execute(q).fetchall()
-            for row in rows:
-                usdict[row.attr_type] = row.attr_data
 
-            # add the users_row data *after* the attributes in case attr_type
-            # matches one of these keys.
-            usdict['uid'] = users_row.uid
-            usdict['identifier'] = users_row.identifier
-            usdict['bb_username'] = users_row.bb_username
-            usdict['bb_password'] = users_row.bb_password
-
-            return usdict
+            return self.thd_createUsDict(users_row, rows)
         d = self.db.pool.do(thd)
         return d
 
@@ -173,14 +169,14 @@ class UsersConnectorComponent(base.DBConnectorComponent):
 
             # first, add the identifier is it exists
             if identifier is not None:
-                self.check_length(tbl.c.identifier, identifier)
+                self.checkLength(tbl.c.identifier, identifier)
                 update_dict['identifier'] = identifier
 
             # then, add the creds if they exist
             if bb_username is not None:
                 assert bb_password is not None
-                self.check_length(tbl.c.bb_username, bb_username)
-                self.check_length(tbl.c.bb_password, bb_password)
+                self.checkLength(tbl.c.bb_username, bb_username)
+                self.checkLength(tbl.c.bb_password, bb_password)
                 update_dict['bb_username'] = bb_username
                 update_dict['bb_password'] = bb_password
 
@@ -194,8 +190,8 @@ class UsersConnectorComponent(base.DBConnectorComponent):
             if attr_type is not None:
                 assert attr_data is not None
 
-                self.check_length(tbl_info.c.attr_type, attr_type)
-                self.check_length(tbl_info.c.attr_data, attr_data)
+                self.checkLength(tbl_info.c.attr_type, attr_type)
+                self.checkLength(tbl_info.c.attr_data, attr_data)
 
                 # first update, then insert
                 q = tbl_info.update(
@@ -203,7 +199,8 @@ class UsersConnectorComponent(base.DBConnectorComponent):
                     & (tbl_info.c.attr_type == attr_type))
                 res = conn.execute(q, attr_data=attr_data)
                 if res.rowcount == 0:
-                    _race_hook and _race_hook(conn)
+                    if _race_hook is not None:
+                        _race_hook(conn)
 
                     # the update hit 0 rows, so try inserting a new one
                     try:
